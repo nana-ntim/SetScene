@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "672666094585",
+    "project_id": "set-scene",
+    "storage_bucket": "set-scene.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:672666094585:android:04fd2d21c2817470920b28",
+        "android_client_info": {
+          "package_name": "com.example.setscene"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAP-Lp-B3tA5I1mUV7ZGD-wryjNWvxbS-k"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
