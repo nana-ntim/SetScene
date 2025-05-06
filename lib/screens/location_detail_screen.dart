@@ -5,10 +5,12 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:setscene/models/location_model.dart';
 import 'package:setscene/services/location_service.dart';
 import 'package:setscene/screens/profile_screen.dart';
+import 'package:setscene/screens/edit_location_screen.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:intl/intl.dart';
 import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 class LocationDetailScreen extends StatefulWidget {
   final LocationModel location;
@@ -33,6 +35,8 @@ class _LocationDetailScreenState extends State<LocationDetailScreen>
   int _currentImageIndex = 0;
   bool _isPlayingAudio = false;
   bool _isLoadingAction = false;
+  bool _isCurrentUserCreator = false;
+  bool _isDeleting = false;
 
   // Weather data (In a real app, this would come from an API)
   final Map<String, dynamic> _weatherData = {
@@ -59,6 +63,12 @@ class _LocationDetailScreenState extends State<LocationDetailScreen>
     _isSaved = widget.location.isSaved;
     _likesCount = widget.location.likesCount;
     _savesCount = widget.location.savesCount;
+
+    // Check if current user is the creator
+    final currentUser = Supabase.instance.client.auth.currentUser;
+    if (currentUser != null) {
+      _isCurrentUserCreator = currentUser.id == widget.location.creatorId;
+    }
 
     _animationController.forward();
   }
@@ -158,6 +168,117 @@ class _LocationDetailScreenState extends State<LocationDetailScreen>
     }
   }
 
+  // Delete location
+  Future<void> _deleteLocation() async {
+    if (_isDeleting) return;
+
+    setState(() {
+      _isDeleting = true;
+    });
+
+    try {
+      // First show confirmation dialog
+      bool confirm =
+          await showDialog(
+            context: context,
+            builder:
+                (context) => AlertDialog(
+                  backgroundColor: Colors.grey[900],
+                  title: const Text(
+                    'Delete Location',
+                    style: TextStyle(color: Colors.white),
+                  ),
+                  content: const Text(
+                    'Are you sure you want to delete this location? This action cannot be undone.',
+                    style: TextStyle(color: Colors.white70),
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.of(context).pop(false),
+                      child: Text(
+                        'Cancel',
+                        style: TextStyle(color: Colors.grey[300]),
+                      ),
+                    ),
+                    ElevatedButton(
+                      onPressed: () => Navigator.of(context).pop(true),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.red[700],
+                      ),
+                      child: const Text('Delete'),
+                    ),
+                  ],
+                ),
+          ) ??
+          false;
+
+      if (!confirm) {
+        setState(() {
+          _isDeleting = false;
+        });
+        return;
+      }
+
+      // Proceed with deletion
+      final success = await _locationService.deleteLocation(widget.location.id);
+
+      if (success) {
+        // Show success message and navigate back
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Location deleted successfully')),
+        );
+
+        // Pop to previous screen
+        Navigator.of(context).pop();
+      } else {
+        throw Exception('Failed to delete location');
+      }
+    } catch (e) {
+      setState(() {
+        _isDeleting = false;
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error deleting location: ${e.toString()}')),
+      );
+    }
+  }
+
+  // Navigate to edit screen
+  void _navigateToEditScreen() async {
+    final result = await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => EditLocationScreen(location: widget.location),
+      ),
+    );
+
+    // If location was updated, refresh the data
+    if (result == true) {
+      // Reload the location data
+      try {
+        final updatedLocation = await _locationService.getLocationById(
+          widget.location.id,
+        );
+        if (updatedLocation != null && mounted) {
+          setState(() {
+            // Update all location properties
+            widget.location.name = updatedLocation.name;
+            widget.location.description = updatedLocation.description;
+            widget.location.address = updatedLocation.address;
+            widget.location.categories = updatedLocation.categories;
+          });
+
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Location updated successfully')),
+          );
+        }
+      } catch (e) {
+        print('Error reloading location: $e');
+      }
+    }
+  }
+
   // Copy address to clipboard
   void _copyAddress() {
     Clipboard.setData(ClipboardData(text: widget.location.address));
@@ -237,194 +358,237 @@ class _LocationDetailScreenState extends State<LocationDetailScreen>
                 ),
               ),
               flexibleSpace: FlexibleSpaceBar(
-                background: Hero(
-                  tag: 'location-${widget.location.id}',
-                  child: Material(
-                    // Fixes yellow line issue
-                    color: Colors.transparent,
-                    child: Stack(
-                      children: [
-                        // Image carousel using PageView
-                        SizedBox(
-                          height: 350,
-                          child: PageView.builder(
-                            controller: _pageController,
-                            itemCount: widget.location.imageUrls.length,
-                            onPageChanged: (index) {
-                              setState(() {
-                                _currentImageIndex = index;
-                              });
-                            },
-                            itemBuilder: (context, index) {
-                              return CachedNetworkImage(
-                                imageUrl: widget.location.imageUrls[index],
-                                fit: BoxFit.cover,
-                                width: double.infinity,
-                                placeholder:
-                                    (context, url) => Container(
-                                      color: Colors.grey[900],
-                                      child: const Center(
-                                        child: CircularProgressIndicator(
-                                          valueColor:
-                                              AlwaysStoppedAnimation<Color>(
-                                                Colors.white,
-                                              ),
-                                        ),
+                background: Stack(
+                  children: [
+                    // Image carousel using PageView
+                    SizedBox(
+                      height: 350,
+                      child: PageView.builder(
+                        controller: _pageController,
+                        itemCount: widget.location.imageUrls.length,
+                        onPageChanged: (index) {
+                          setState(() {
+                            _currentImageIndex = index;
+                          });
+                        },
+                        itemBuilder: (context, index) {
+                          return CachedNetworkImage(
+                            imageUrl: widget.location.imageUrls[index],
+                            fit: BoxFit.cover,
+                            width: double.infinity,
+                            placeholder:
+                                (context, url) => Container(
+                                  color: Colors.grey[900],
+                                  child: const Center(
+                                    child: CircularProgressIndicator(
+                                      valueColor: AlwaysStoppedAnimation<Color>(
+                                        Colors.white,
                                       ),
                                     ),
-                                errorWidget:
-                                    (context, url, error) => Container(
-                                      color: Colors.grey[900],
-                                      child: const Icon(
-                                        Icons.error,
-                                        color: Colors.white,
-                                      ),
-                                    ),
-                              );
-                            },
-                          ),
-                        ),
-
-                        // Image pagination indicators
-                        if (widget.location.imageUrls.length > 1)
-                          Positioned(
-                            bottom: 20,
-                            left: 0,
-                            right: 0,
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: List.generate(
-                                widget.location.imageUrls.length,
-                                (index) => AnimatedContainer(
-                                  duration: const Duration(milliseconds: 200),
-                                  width: _currentImageIndex == index ? 24 : 8,
-                                  height: 8,
-                                  margin: const EdgeInsets.symmetric(
-                                    horizontal: 4,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    borderRadius: BorderRadius.circular(12),
-                                    color:
-                                        _currentImageIndex == index
-                                            ? Colors.white
-                                            : Colors.white.withOpacity(0.5),
-                                    boxShadow:
-                                        _currentImageIndex == index
-                                            ? [
-                                              BoxShadow(
-                                                color: Colors.black.withOpacity(
-                                                  0.3,
-                                                ),
-                                                blurRadius: 4,
-                                                offset: const Offset(0, 2),
-                                              ),
-                                            ]
-                                            : null,
                                   ),
                                 ),
-                              ),
-                            ),
-                          ),
-
-                        // Gradient overlay
-                        Positioned(
-                          left: 0,
-                          right: 0,
-                          bottom: 0,
-                          height: 150,
-                          child: Container(
-                            decoration: BoxDecoration(
-                              gradient: LinearGradient(
-                                begin: Alignment.topCenter,
-                                end: Alignment.bottomCenter,
-                                colors: [
-                                  Colors.transparent,
-                                  Colors.black.withOpacity(0.7),
-                                ],
-                                stops: const [0.0, 1.0],
-                              ),
-                            ),
-                          ),
-                        ),
-
-                        // Creator info top-left
-                        Positioned(
-                          top: 16,
-                          left: 80, // Position after the back button
-                          child: GestureDetector(
-                            onTap: _navigateToCreatorProfile,
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 8,
-                              ),
-                              decoration: BoxDecoration(
-                                color: Colors.black.withOpacity(0.5),
-                                borderRadius: BorderRadius.circular(20),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.black.withOpacity(0.3),
-                                    blurRadius: 8,
-                                    offset: const Offset(0, 2),
+                            errorWidget:
+                                (context, url, error) => Container(
+                                  color: Colors.grey[900],
+                                  child: const Icon(
+                                    Icons.error,
+                                    color: Colors.white,
                                   ),
-                                ],
-                              ),
-                              child: Row(
-                                children: [
-                                  ClipOval(
-                                    child:
-                                        widget.location.creatorPhotoUrl != null
-                                            ? CachedNetworkImage(
-                                              imageUrl:
-                                                  widget
-                                                      .location
-                                                      .creatorPhotoUrl!,
-                                              width: 24,
-                                              height: 24,
-                                              fit: BoxFit.cover,
-                                              placeholder:
-                                                  (context, url) => Container(
-                                                    color: Colors.grey[850],
-                                                    width: 24,
-                                                    height: 24,
-                                                    child: const Icon(
-                                                      Icons.person,
-                                                      color: Colors.white,
-                                                      size: 16,
-                                                    ),
-                                                  ),
-                                            )
-                                            : Container(
-                                              color: Colors.grey[850],
-                                              width: 24,
-                                              height: 24,
-                                              child: const Icon(
-                                                Icons.person,
-                                                color: Colors.white,
-                                                size: 16,
-                                              ),
-                                            ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Text(
-                                    '@${widget.location.creatorUsername}',
-                                    style: const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.w500,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
+                                ),
+                          );
+                        },
+                      ),
                     ),
-                  ),
+
+                    // Image pagination indicators
+                    if (widget.location.imageUrls.length > 1)
+                      Positioned(
+                        bottom: 20,
+                        left: 0,
+                        right: 0,
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: List.generate(
+                            widget.location.imageUrls.length,
+                            (index) => AnimatedContainer(
+                              duration: const Duration(milliseconds: 200),
+                              width: _currentImageIndex == index ? 24 : 8,
+                              height: 8,
+                              margin: const EdgeInsets.symmetric(horizontal: 4),
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(12),
+                                color:
+                                    _currentImageIndex == index
+                                        ? Colors.white
+                                        : Colors.white.withOpacity(0.5),
+                                boxShadow:
+                                    _currentImageIndex == index
+                                        ? [
+                                          BoxShadow(
+                                            color: Colors.black.withOpacity(
+                                              0.3,
+                                            ),
+                                            blurRadius: 4,
+                                            offset: const Offset(0, 2),
+                                          ),
+                                        ]
+                                        : null,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+
+                    // Gradient overlay
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      height: 150,
+                      child: Container(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [
+                              Colors.transparent,
+                              Colors.black.withOpacity(0.7),
+                            ],
+                            stops: const [0.0, 1.0],
+                          ),
+                        ),
+                      ),
+                    ),
+
+                    // Creator info top-left
+                    Positioned(
+                      top: 16,
+                      left: 80, // Position after the back button
+                      child: GestureDetector(
+                        onTap: _navigateToCreatorProfile,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 8,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withOpacity(0.5),
+                            borderRadius: BorderRadius.circular(20),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.3),
+                                blurRadius: 8,
+                                offset: const Offset(0, 2),
+                              ),
+                            ],
+                          ),
+                          child: Row(
+                            children: [
+                              ClipOval(
+                                child:
+                                    widget.location.creatorPhotoUrl != null
+                                        ? CachedNetworkImage(
+                                          imageUrl:
+                                              widget.location.creatorPhotoUrl!,
+                                          width: 24,
+                                          height: 24,
+                                          fit: BoxFit.cover,
+                                          placeholder:
+                                              (context, url) => Container(
+                                                color: Colors.grey[850],
+                                                width: 24,
+                                                height: 24,
+                                                child: const Icon(
+                                                  Icons.person,
+                                                  color: Colors.white,
+                                                  size: 16,
+                                                ),
+                                              ),
+                                        )
+                                        : Container(
+                                          color: Colors.grey[850],
+                                          width: 24,
+                                          height: 24,
+                                          child: const Icon(
+                                            Icons.person,
+                                            color: Colors.white,
+                                            size: 16,
+                                          ),
+                                        ),
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                '@${widget.location.creatorUsername}',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
               actions: [
+                // Edit button (only for creator)
+                if (_isCurrentUserCreator)
+                  Container(
+                    margin: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.black38,
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.3),
+                          blurRadius: 8,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    child: IconButton(
+                      icon: const Icon(Icons.edit, color: Colors.white),
+                      onPressed: _navigateToEditScreen,
+                    ),
+                  ),
+
+                // Delete button (only for creator)
+                if (_isCurrentUserCreator)
+                  Container(
+                    margin: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.red.withOpacity(0.2),
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.3),
+                          blurRadius: 8,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    child:
+                        _isDeleting
+                            ? Container(
+                              width: 24,
+                              height: 24,
+                              padding: const EdgeInsets.all(8),
+                              child: const CircularProgressIndicator(
+                                valueColor: AlwaysStoppedAnimation<Color>(
+                                  Colors.red,
+                                ),
+                                strokeWidth: 2,
+                              ),
+                            )
+                            : IconButton(
+                              icon: const Icon(Icons.delete, color: Colors.red),
+                              onPressed: _deleteLocation,
+                            ),
+                  ),
+
                 // Share button
                 Container(
                   margin: const EdgeInsets.all(8),

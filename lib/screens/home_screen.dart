@@ -3,7 +3,6 @@
 import 'package:flutter/material.dart';
 import 'package:setscene/screens/feed_screen.dart';
 import 'package:setscene/screens/create_screen.dart';
-import 'package:setscene/screens/map_screen.dart';
 import 'package:setscene/screens/saved_screen.dart';
 import 'package:setscene/screens/profile_screen.dart';
 import 'package:setscene/services/auth_service.dart';
@@ -23,7 +22,7 @@ class _HomeScreenState extends State<HomeScreen>
   late PageController _pageController;
   late AnimationController _animationController;
 
-  // List of screen widgets
+  // List of screen widgets (removed map screen)
   late final List<Widget> _screens;
 
   @override
@@ -39,12 +38,11 @@ class _HomeScreenState extends State<HomeScreen>
       duration: const Duration(milliseconds: 300),
     );
 
-    // Initialize screens
+    // Initialize screens (without map screen)
     _screens = [
       const FeedScreen(),
-      const MapScreen(),
-      Container(), // Empty container for create (modal instead)
       const SavedScreen(),
+      Container(), // Empty container for create (modal instead)
       const ProfileScreen(),
     ];
   }
@@ -58,6 +56,7 @@ class _HomeScreenState extends State<HomeScreen>
 
   // Handle tab change
   void _onTabTapped(int index) {
+    // Adjust index for removed map tab
     if (index == 2) {
       // Special handling for Create tab
       _showCreateOptions();
@@ -114,34 +113,30 @@ class _HomeScreenState extends State<HomeScreen>
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
-      // Wrap the body in a SafeArea to prevent overflows
-      body: SafeArea(
-        // Only apply safe area to the top and sides, not the bottom
-        top: true,
-        bottom: false,
-        child: PageView(
-          controller: _pageController,
-          physics:
-              const NeverScrollableScrollPhysics(), // Disable swiping between pages
-          children: _screens,
-          onPageChanged: (index) {
-            if (index != 2) {
-              // Skip the create page in page view
-              setState(() {
-                _currentIndex = index;
-              });
-            }
-          },
-        ),
+      body: PageView(
+        controller: _pageController,
+        physics:
+            const NeverScrollableScrollPhysics(), // Disable swiping between pages
+        children: _screens,
+        onPageChanged: (index) {
+          if (index != 2) {
+            // Skip the create page in page view
+            setState(() {
+              _currentIndex = index;
+            });
+          }
+        },
       ),
-      // This is crucial for proper layout with the custom bottom nav bar
-      extendBody: true,
-      bottomNavigationBar: Padding(
-        // Add padding only at the bottom to ensure nav bar is visible
-        padding: const EdgeInsets.only(bottom: 16),
-        child: CustomBottomNavBar(
-          currentIndex: _currentIndex,
-          onTap: _onTabTapped,
+      extendBody: true, // Important to prevent bottom overflow
+      bottomNavigationBar: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.only(
+            bottom: 0,
+          ), // Extra padding to prevent overlap issues
+          child: CustomBottomNavBar(
+            currentIndex: _currentIndex,
+            onTap: _onTabTapped,
+          ),
         ),
       ),
     );

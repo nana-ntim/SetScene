@@ -27,31 +27,51 @@ class AuthService {
 
       if (response == null) {
         print("AuthService: User profile not found in database");
-        // Try to create the profile
-        return await _createUserProfile(user);
+        // Try to create the profile using RPC function
+        return await _createUserProfileRPC(user);
       }
 
       return UserModel.fromMap(response, user.id);
     } catch (e) {
       print('AuthService: Error getting current user: $e');
-      // Return a minimal user model with just the auth info to prevent "user not found" errors
-      final user = _supabase.auth.currentUser;
-      if (user != null) {
-        print("AuthService: Returning minimal user model as fallback");
-        return UserModel(
-          uid: user.id,
-          email: user.email ?? '',
-          fullName: user.userMetadata?['full_name'] as String? ?? 'User',
-          username:
-              user.userMetadata?['username'] as String? ??
-              'user_${user.id.substring(0, 6)}',
-        );
-      }
       return null;
     }
   }
 
-  // Create a user profile for an existing auth user
+  // Create a user profile for an existing auth user using RPC function
+  Future<UserModel?> _createUserProfileRPC(User user) async {
+    try {
+      print(
+        "AuthService: Attempting to create missing user profile for ${user.id} using RPC",
+      );
+
+      // Call the dedicated RPC function to create the user profile
+      final success = await _supabase.rpc(
+        'create_missing_user_profile',
+        params: {'user_id_param': user.id, 'email_param': user.email ?? ''},
+      );
+
+      if (success == true) {
+        print("AuthService: Successfully created missing user profile");
+
+        // Fetch the newly created profile
+        final userResponse =
+            await _supabase.from('users').select().eq('id', user.id).single();
+
+        return UserModel.fromMap(userResponse, user.id);
+      } else {
+        print("AuthService: Failed to create user profile using RPC function");
+        // Fall back to direct creation method
+        return await _createUserProfile(user);
+      }
+    } catch (e) {
+      print("AuthService: Error creating user profile with RPC: $e");
+      // Fall back to direct creation method
+      return await _createUserProfile(user);
+    }
+  }
+
+  // Legacy method to create a user profile directly
   Future<UserModel?> _createUserProfile(User user) async {
     try {
       print("AuthService: Creating missing user profile for ${user.id}");
@@ -82,15 +102,13 @@ class AuthService {
       }
 
       // Create user profile
-      final userData = {
+      await _supabase.from('users').insert({
         'id': user.id,
         'email': user.email,
         'full_name': fullName,
         'username': username,
         'created_at': DateTime.now().toIso8601String(),
-      };
-
-      await _supabase.from('users').insert(userData);
+      });
 
       print(
         "AuthService: Created missing user profile with username: $username",
@@ -106,15 +124,7 @@ class AuthService {
       );
     } catch (e) {
       print("AuthService: Error creating user profile: $e");
-      // Return a minimal user model with just the auth info to prevent "user not found" errors
-      return UserModel(
-        uid: user.id,
-        email: user.email ?? '',
-        fullName: user.userMetadata?['full_name'] as String? ?? 'User',
-        username:
-            user.userMetadata?['username'] as String? ??
-            'user_${user.id.substring(0, 6)}',
-      );
+      return null;
     }
   }
 
@@ -167,8 +177,8 @@ class AuthService {
         "AuthService: Sign up completed. User created: ${response.user?.id}",
       );
 
-      // Since we've disabled email confirmation in Supabase settings,
-      // the user should be automatically logged in
+      // Wait a moment to allow the trigger to run
+      await Future.delayed(const Duration(milliseconds: 1000));
 
       // If the user was created but the trigger failed to create a profile,
       // let's manually create one
@@ -186,19 +196,28 @@ class AuthService {
             print(
               "AuthService: Trigger failed to create user profile, creating manually",
             );
-            // Wait a bit to make sure any pending trigger operations complete
-            await Future.delayed(const Duration(milliseconds: 500));
 
-            // Create profile manually
-            await _supabase.from('users').insert({
-              'id': response.user!.id,
-              'email': email,
-              'full_name': fullName,
-              'username': username,
-              'created_at': DateTime.now().toIso8601String(),
-            });
+            // Try RPC method first
+            final success = await _supabase.rpc(
+              'create_missing_user_profile',
+              params: {
+                'user_id_param': response.user!.id,
+                'email_param': email,
+              },
+            );
 
-            print("AuthService: Manually created user profile");
+            if (success != true) {
+              // Fall back to direct creation
+              await _supabase.from('users').insert({
+                'id': response.user!.id,
+                'email': email,
+                'full_name': fullName,
+                'username': username,
+                'created_at': DateTime.now().toIso8601String(),
+              });
+            }
+
+            print("AuthService: Manually created user profile for new signup");
           } else {
             print("AuthService: User profile was created by trigger");
           }
@@ -229,6 +248,9 @@ class AuthService {
 
       print("AuthService: Sign in successful for user: ${response.user?.id}");
 
+      // Wait a moment to ensure auth state is updated
+      await Future.delayed(const Duration(milliseconds: 500));
+
       // If login successful but user profile doesn't exist,
       // check again and create it if needed
       if (response.user != null) {
@@ -245,8 +267,19 @@ class AuthService {
               "AuthService: User profile doesn't exist after login, creating",
             );
 
-            // Create profile manually
-            await _createUserProfile(response.user!);
+            // Try to create the profile using RPC function
+            final success = await _supabase.rpc(
+              'create_missing_user_profile',
+              params: {
+                'user_id_param': response.user!.id,
+                'email_param': email,
+              },
+            );
+
+            if (success != true) {
+              // Fall back to direct creation method
+              await _createUserProfile(response.user!);
+            }
           }
         } catch (e) {
           print(

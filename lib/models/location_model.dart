@@ -4,16 +4,16 @@ import 'package:intl/intl.dart';
 
 class LocationModel {
   final String id;
-  final String name;
-  final String description;
-  final String address;
+  String name;
+  String description;
+  String address;
   final double latitude;
   final double longitude;
   final List<String> imageUrls;
   final String? audioUrl;
   final double visualRating;
   final double audioRating;
-  final List<String> categories;
+  List<String> categories;
   final String creatorId;
   final String creatorName;
   final String creatorUsername;

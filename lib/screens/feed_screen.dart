@@ -252,12 +252,13 @@ class _FeedScreenState extends State<FeedScreen>
                                 ),
                               ),
 
-                            // Current card
+                            // Current card with more bottom padding
                             Positioned(
                               top: 20,
                               left: 20,
                               right: 20,
-                              bottom: 90,
+                              bottom:
+                                  140, // Increased bottom padding to ensure visibility
                               child: AnimatedBuilder(
                                 animation: _animationController,
                                 builder: (context, child) {
@@ -304,7 +305,7 @@ class _FeedScreenState extends State<FeedScreen>
                                     vertical: 8,
                                   ),
                                   decoration: BoxDecoration(
-                                    color: Colors.red,
+                                    color: Colors.red[800],
                                     borderRadius: BorderRadius.circular(20),
                                   ),
                                   child: const Row(
@@ -362,7 +363,7 @@ class _FeedScreenState extends State<FeedScreen>
         // Swipe help tooltip - shown only initially
         if (_showSwipeHelp && _locations.isNotEmpty && !_isLoading)
           Positioned(
-            bottom: 120,
+            bottom: 160, // Adjusted position
             left: 0,
             right: 0,
             child: Center(

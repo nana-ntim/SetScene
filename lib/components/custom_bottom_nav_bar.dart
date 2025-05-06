@@ -14,23 +14,22 @@ class CustomBottomNavBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Define nav items
+    // Define nav items (removed map item)
     final List<NavItem> items = [
       NavItem(
         icon: Icons.explore_outlined,
         activeIcon: Icons.explore,
         label: 'Explore',
       ),
-      NavItem(icon: Icons.map_outlined, activeIcon: Icons.map, label: 'Map'),
-      NavItem(
-        icon: Icons.add_circle_outline,
-        activeIcon: Icons.add_circle,
-        label: '', // Empty label for center button
-      ),
       NavItem(
         icon: Icons.bookmark_border,
         activeIcon: Icons.bookmark,
         label: 'Saved',
+      ),
+      NavItem(
+        icon: Icons.add_circle_outline,
+        activeIcon: Icons.add_circle,
+        label: '', // Empty label for center button
       ),
       NavItem(
         icon: Icons.person_outline,
@@ -39,12 +38,9 @@ class CustomBottomNavBar extends StatelessWidget {
       ),
     ];
 
-    // Calculate the safe area bottom padding to ensure the nav bar is fully visible
-    final bottomPadding = MediaQuery.of(context).padding.bottom;
-
     return Container(
       height: 80,
-      margin: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
         color: Colors.grey[900],
         borderRadius: BorderRadius.circular(24),

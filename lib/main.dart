@@ -219,38 +219,31 @@ class _AuthWrapperState extends State<AuthWrapper> {
         print("AuthWrapper: User is logged in (ID: ${user.id})");
 
         try {
-          // Check if user profile exists in database
-          final profileCheck =
-              await SupabaseService.client
-                  .from('users')
-                  .select()
-                  .eq('id', user.id)
-                  .maybeSingle();
+          // Get user profile using the AuthService
+          final userProfile = await _authService.getCurrentUser();
 
-          if (profileCheck == null) {
-            // Profile doesn't exist, try to create it
-            print("AuthWrapper: User profile doesn't exist, creating it");
+          if (userProfile == null) {
+            print(
+              "AuthWrapper: Failed to get user profile after multiple attempts",
+            );
 
-            // Use the AuthService to ensure profile creation with proper fallback
-            final userProfile = await _authService.getCurrentUser();
-
-            if (userProfile == null && _retryCount < _maxRetries) {
-              // Profile still doesn't exist, retry
+            if (_retryCount < _maxRetries) {
               _retryCount++;
               print(
-                "AuthWrapper: Profile creation failed, retrying (attempt $_retryCount)",
+                "AuthWrapper: Retrying profile check (attempt $_retryCount)",
               );
               await Future.delayed(const Duration(seconds: 1));
               return _checkAuthState();
-            } else if (userProfile == null) {
-              // Max retries reached, show error
+            } else {
               throw Exception(
-                "Failed to create user profile after $_maxRetries attempts",
+                "Failed to load user profile after $_maxRetries attempts",
               );
             }
           }
 
-          // At this point, we're confident the profile exists or we have a fallback
+          print("AuthWrapper: User profile loaded successfully");
+
+          // At this point, we're confident the profile exists
           if (mounted) {
             setState(() {
               _isLoading = false;
@@ -259,12 +252,23 @@ class _AuthWrapperState extends State<AuthWrapper> {
         } catch (profileError) {
           print("AuthWrapper: Error with user profile: $profileError");
 
-          // Allow proceeding to home screen even with profile error
-          // This is a key change to prevent login loops
+          if (_retryCount < _maxRetries) {
+            _retryCount++;
+            print("AuthWrapper: Retrying after error (attempt $_retryCount)");
+            await Future.delayed(const Duration(seconds: 1));
+            return _checkAuthState();
+          }
+
           if (mounted) {
             setState(() {
+              _error = "Error loading your profile. Please sign in again.";
               _isLoading = false;
             });
+
+            // Only sign out if we have a critical error after multiple retries
+            if (_retryCount >= _maxRetries) {
+              await _authService.signOut();
+            }
           }
         }
       } else {
@@ -293,8 +297,18 @@ class _AuthWrapperState extends State<AuthWrapper> {
       return const Scaffold(
         backgroundColor: Colors.black,
         body: Center(
-          child: CircularProgressIndicator(
-            valueColor: AlwaysStoppedAnimation<Color>(Colors.blue),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              CircularProgressIndicator(
+                valueColor: AlwaysStoppedAnimation<Color>(Colors.blue),
+              ),
+              SizedBox(height: 20),
+              Text(
+                'Loading your profile...',
+                style: TextStyle(color: Colors.white, fontSize: 16),
+              ),
+            ],
           ),
         ),
       );
@@ -317,8 +331,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
       return const LoginScreen();
     }
 
-    // If user is authenticated, show home screen
-    // Even if profile has issues, we'll proceed to home screen
+    // If user is authenticated and verified, show home screen
     print("AuthWrapper: Showing home screen for user: ${user.id}");
     return const HomeScreen();
   }

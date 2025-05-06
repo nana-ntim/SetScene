@@ -446,146 +446,7 @@ class LocationService {
     }
   }
 
-  // Save a location with improved error handling
-  Future<void> saveLocation(String locationId) async {
-    try {
-      // Check if user is logged in
-      final user = _supabase.auth.currentUser;
-      if (user == null) {
-        throw Exception('User not logged in');
-      }
-
-      // Check if already saved to avoid duplicate records
-      final isSaved = await isLocationSaved(locationId);
-      if (isSaved) {
-        print('Location already saved, skipping');
-        return; // Already saved, no need to do anything
-      }
-
-      // Start a transaction by wrapping operations
-      try {
-        // Save location
-        await _supabase.from('saved_locations').insert({
-          'user_id': user.id,
-          'location_id': locationId,
-          'saved_at': DateTime.now().toIso8601String(),
-        });
-
-        // Update location's saves count
-        await _supabase.rpc(
-          'increment_saves_count',
-          params: {'location_id_param': locationId},
-        );
-
-        print('Location saved successfully');
-      } catch (e) {
-        print('Transaction error: $e');
-        // If there was an error with the RPC function but the record was inserted,
-        // we should try to clean up by removing the saved record
-        try {
-          await _supabase
-              .from('saved_locations')
-              .delete()
-              .eq('user_id', user.id)
-              .eq('location_id', locationId);
-        } catch (cleanupError) {
-          print('Error cleaning up after failed save: $cleanupError');
-        }
-        rethrow;
-      }
-    } catch (e) {
-      print('Error saving location: $e');
-      rethrow;
-    }
-  }
-
-  // Unsave a location with improved error handling
-  Future<void> unsaveLocation(String locationId) async {
-    try {
-      // Check if user is logged in
-      final user = _supabase.auth.currentUser;
-      if (user == null) {
-        throw Exception('User not logged in');
-      }
-
-      // Check if actually saved
-      final isSaved = await isLocationSaved(locationId);
-      if (!isSaved) {
-        print('Location not saved, nothing to unsave');
-        return; // Not saved, nothing to do
-      }
-
-      // First get current saves count to make sure we don't go below 0
-      final response =
-          await _supabase
-              .from('locations')
-              .select('saves_count')
-              .eq('id', locationId)
-              .single();
-
-      final int savesCount = response['saves_count'] as int;
-
-      // Start a transaction by wrapping operations
-      try {
-        // Delete saved record
-        await _supabase
-            .from('saved_locations')
-            .delete()
-            .eq('user_id', user.id)
-            .eq('location_id', locationId);
-
-        // Only decrement if count is greater than 0
-        if (savesCount > 0) {
-          // Update location's saves count
-          await _supabase.rpc(
-            'decrement_saves_count',
-            params: {'location_id_param': locationId},
-          );
-        } else {
-          // If count is already 0 or negative, reset it to 0
-          await _supabase
-              .from('locations')
-              .update({'saves_count': 0})
-              .eq('id', locationId);
-        }
-
-        print('Location unsaved successfully');
-      } catch (e) {
-        print('Transaction error: $e');
-        rethrow;
-      }
-    } catch (e) {
-      print('Error unsaving location: $e');
-      rethrow;
-    }
-  }
-
-  // Check if a location is saved
-  Future<bool> isLocationSaved(String locationId) async {
-    try {
-      // Check if user is logged in
-      final user = _supabase.auth.currentUser;
-      if (user == null) {
-        return false;
-      }
-
-      // Check if location is saved
-      final response =
-          await _supabase
-              .from('saved_locations')
-              .select('id')
-              .eq('user_id', user.id)
-              .eq('location_id', locationId)
-              .maybeSingle();
-
-      return response != null;
-    } catch (e) {
-      print('Error checking if location is saved: $e');
-      return false;
-    }
-  }
-
-  // Like a location with improved error handling
+  // Like a location using RPC function to bypass RLS
   Future<void> likeLocation(String locationId) async {
     try {
       // Check if user is logged in
@@ -594,51 +455,45 @@ class LocationService {
         throw Exception('User not logged in');
       }
 
-      // Check if already liked to avoid duplicate records
-      final isLiked = await isLocationLiked(locationId);
-      if (isLiked) {
+      print('Attempting to like location: $locationId for user: ${user.id}');
+
+      // Check if already liked using RPC function
+      final bool isAlreadyLiked =
+          await _supabase.rpc(
+            'check_if_liked',
+            params: {'user_id_param': user.id, 'location_id_param': locationId},
+          ) ??
+          false;
+
+      print('Is location already liked: $isAlreadyLiked');
+
+      if (isAlreadyLiked) {
         print('Location already liked, skipping');
         return; // Already liked, no need to do anything
       }
 
-      // Start a transaction by wrapping operations
-      try {
-        // Like location
-        await _supabase.from('liked_locations').insert({
-          'user_id': user.id,
-          'location_id': locationId,
-          'liked_at': DateTime.now().toIso8601String(),
-        });
+      // Insert like record using RPC function
+      await _supabase.rpc(
+        'insert_like',
+        params: {'user_id_param': user.id, 'location_id_param': locationId},
+      );
 
-        // Update location's likes count
-        await _supabase.rpc(
-          'increment_likes_count',
-          params: {'location_id_param': locationId},
-        );
+      print('Like record inserted successfully');
 
-        print('Location liked successfully');
-      } catch (e) {
-        print('Transaction error: $e');
-        // If there was an error with the RPC function but the record was inserted,
-        // we should try to clean up by removing the liked record
-        try {
-          await _supabase
-              .from('liked_locations')
-              .delete()
-              .eq('user_id', user.id)
-              .eq('location_id', locationId);
-        } catch (cleanupError) {
-          print('Error cleaning up after failed like: $cleanupError');
-        }
-        rethrow;
-      }
+      // Update location's likes count
+      await _supabase.rpc(
+        'increment_likes_count',
+        params: {'location_id_param': locationId},
+      );
+
+      print('Location liked successfully');
     } catch (e) {
       print('Error liking location: $e');
       rethrow;
     }
   }
 
-  // Unlike a location with improved error handling
+  // Unlike a location using RPC function to bypass RLS
   Future<void> unlikeLocation(String locationId) async {
     try {
       // Check if user is logged in
@@ -647,59 +502,45 @@ class LocationService {
         throw Exception('User not logged in');
       }
 
-      // Check if actually liked
-      final isLiked = await isLocationLiked(locationId);
+      print('Attempting to unlike location: $locationId for user: ${user.id}');
+
+      // Check if actually liked using RPC function
+      final bool isLiked =
+          await _supabase.rpc(
+            'check_if_liked',
+            params: {'user_id_param': user.id, 'location_id_param': locationId},
+          ) ??
+          false;
+
+      print('Is location currently liked: $isLiked');
+
       if (!isLiked) {
         print('Location not liked, nothing to unlike');
         return; // Not liked, nothing to do
       }
 
-      // First get current likes count to make sure we don't go below 0
-      final response =
-          await _supabase
-              .from('locations')
-              .select('likes_count')
-              .eq('id', locationId)
-              .single();
+      // Delete like record using RPC function
+      await _supabase.rpc(
+        'delete_like',
+        params: {'user_id_param': user.id, 'location_id_param': locationId},
+      );
 
-      final int likesCount = response['likes_count'] as int;
+      print('Like record deleted successfully');
 
-      // Start a transaction by wrapping operations
-      try {
-        // Delete liked record
-        await _supabase
-            .from('liked_locations')
-            .delete()
-            .eq('user_id', user.id)
-            .eq('location_id', locationId);
+      // Decrement likes count
+      await _supabase.rpc(
+        'decrement_likes_count',
+        params: {'location_id_param': locationId},
+      );
 
-        // Only decrement if count is greater than 0
-        if (likesCount > 0) {
-          // Update location's likes count
-          await _supabase.rpc(
-            'decrement_likes_count',
-            params: {'location_id_param': locationId},
-          );
-        } else {
-          // If count is already 0 or negative, reset it to 0
-          await _supabase
-              .from('locations')
-              .update({'likes_count': 0})
-              .eq('id', locationId);
-        }
-
-        print('Location unliked successfully');
-      } catch (e) {
-        print('Transaction error: $e');
-        rethrow;
-      }
+      print('Location unliked successfully');
     } catch (e) {
       print('Error unliking location: $e');
       rethrow;
     }
   }
 
-  // Check if a location is liked
+  // Check if a location is liked using RPC function
   Future<bool> isLocationLiked(String locationId) async {
     try {
       // Check if user is logged in
@@ -708,18 +549,131 @@ class LocationService {
         return false;
       }
 
-      // Check if location is liked
-      final response =
-          await _supabase
-              .from('liked_locations')
-              .select('id')
-              .eq('user_id', user.id)
-              .eq('location_id', locationId)
-              .maybeSingle();
+      // Use RPC function to bypass RLS
+      final result = await _supabase.rpc(
+        'check_if_liked',
+        params: {'user_id_param': user.id, 'location_id_param': locationId},
+      );
 
-      return response != null;
+      return result ?? false;
     } catch (e) {
       print('Error checking if location is liked: $e');
+      return false;
+    }
+  }
+
+  // Save a location using RPC function to bypass RLS
+  Future<void> saveLocation(String locationId) async {
+    try {
+      // Check if user is logged in
+      final user = _supabase.auth.currentUser;
+      if (user == null) {
+        throw Exception('User not logged in');
+      }
+
+      print('Attempting to save location: $locationId for user: ${user.id}');
+
+      // Check if already saved using RPC function
+      final bool isAlreadySaved =
+          await _supabase.rpc(
+            'check_if_saved',
+            params: {'user_id_param': user.id, 'location_id_param': locationId},
+          ) ??
+          false;
+
+      print('Is location already saved: $isAlreadySaved');
+
+      if (isAlreadySaved) {
+        print('Location already saved, skipping');
+        return; // Already saved, no need to do anything
+      }
+
+      // Insert save record using RPC function
+      await _supabase.rpc(
+        'insert_save',
+        params: {'user_id_param': user.id, 'location_id_param': locationId},
+      );
+
+      print('Save record inserted successfully');
+
+      // Update location's saves count
+      await _supabase.rpc(
+        'increment_saves_count',
+        params: {'location_id_param': locationId},
+      );
+
+      print('Location saved successfully');
+    } catch (e) {
+      print('Error saving location: $e');
+      rethrow;
+    }
+  }
+
+  // Unsave a location using RPC function to bypass RLS
+  Future<void> unsaveLocation(String locationId) async {
+    try {
+      // Check if user is logged in
+      final user = _supabase.auth.currentUser;
+      if (user == null) {
+        throw Exception('User not logged in');
+      }
+
+      print('Attempting to unsave location: $locationId for user: ${user.id}');
+
+      // Check if actually saved using RPC function
+      final bool isSaved =
+          await _supabase.rpc(
+            'check_if_saved',
+            params: {'user_id_param': user.id, 'location_id_param': locationId},
+          ) ??
+          false;
+
+      print('Is location currently saved: $isSaved');
+
+      if (!isSaved) {
+        print('Location not saved, nothing to unsave');
+        return; // Not saved, nothing to do
+      }
+
+      // Delete save record using RPC function
+      await _supabase.rpc(
+        'delete_save',
+        params: {'user_id_param': user.id, 'location_id_param': locationId},
+      );
+
+      print('Save record deleted successfully');
+
+      // Decrement saves count
+      await _supabase.rpc(
+        'decrement_saves_count',
+        params: {'location_id_param': locationId},
+      );
+
+      print('Location unsaved successfully');
+    } catch (e) {
+      print('Error unsaving location: $e');
+      rethrow;
+    }
+  }
+
+  // Check if a location is saved using RPC function
+  Future<bool> isLocationSaved(String locationId) async {
+    try {
+      // Check if user is logged in
+      final user = _supabase.auth.currentUser;
+      if (user == null) {
+        return false;
+      }
+
+      // Use RPC function to bypass RLS
+      final result = await _supabase.rpc(
+        'check_if_saved',
+        params: {'user_id_param': user.id, 'location_id_param': locationId},
+      );
+
+      return result ?? false;
+    } catch (e) {
+      print('Error checking if location is saved: $e');
       return false;
     }
   }
