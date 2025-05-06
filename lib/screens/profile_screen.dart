@@ -1,3 +1,5 @@
+// File location: lib/screens/profile_screen.dart
+
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:setscene/models/user_model.dart';
@@ -7,7 +9,6 @@ import 'package:setscene/services/user_service.dart';
 import 'package:setscene/services/location_service.dart';
 import 'package:setscene/screens/location_detail_screen.dart';
 import 'package:setscene/screens/login_screen.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 
 class ProfileScreen extends StatefulWidget {
   final String? userId; // If null, shows current user profile
@@ -38,11 +39,7 @@ class _ProfileScreenState extends State<ProfileScreen>
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
-
-    // Delay loading to ensure widget is properly mounted
-    Future.delayed(Duration.zero, () {
-      _loadData();
-    });
+    _loadData();
   }
 
   @override
@@ -64,7 +61,6 @@ class _ProfileScreenState extends State<ProfileScreen>
       final currentUser = _authService.currentUser;
 
       if (currentUser == null) {
-        // No authenticated user - handle this case
         setState(() {
           _isLoading = false;
           _hasError = true;
@@ -76,28 +72,27 @@ class _ProfileScreenState extends State<ProfileScreen>
       // Determine if this is the current user's profile or someone else's
       _isMyProfile = widget.userId == null || widget.userId == currentUser.uid;
 
-      // Create a temporary user model if user service fails
-      // This ensures we at least have something to display
-      UserModel tempUser = UserModel(
-        uid: currentUser.uid,
-        email: currentUser.email ?? 'No email',
-        fullName: currentUser.displayName ?? 'SetScene User',
-        username: currentUser.email?.split('@').first ?? 'user',
-        photoUrl: currentUser.photoURL,
-        createdAt: DateTime.now(),
-      );
-
-      // Try to get user from Firestore
+      // Get user data
       UserModel? userFromDb;
-
       if (_isMyProfile) {
         userFromDb = await _userService.getCurrentUserProfile();
       } else if (widget.userId != null) {
         userFromDb = await _userService.getUserById(widget.userId!);
       }
 
-      // Use user from Firestore if available, otherwise use temp user
-      _user = userFromDb ?? tempUser;
+      if (userFromDb == null) {
+        // Create a fallback user model
+        userFromDb = UserModel(
+          uid: currentUser.uid,
+          email: currentUser.email ?? 'No email',
+          fullName: currentUser.displayName ?? 'SetScene User',
+          username: currentUser.email?.split('@').first ?? 'user',
+          photoUrl: currentUser.photoURL,
+          createdAt: DateTime.now(),
+        );
+      }
+
+      _user = userFromDb;
 
       // Load user's created locations
       if (_user != null) {
@@ -152,14 +147,7 @@ class _ProfileScreenState extends State<ProfileScreen>
   @override
   Widget build(BuildContext context) {
     if (_isLoading) {
-      return const Scaffold(
-        backgroundColor: Colors.black,
-        body: Center(
-          child: CircularProgressIndicator(
-            valueColor: AlwaysStoppedAnimation<Color>(Colors.blue),
-          ),
-        ),
-      );
+      return _buildLoadingState();
     }
 
     if (_hasError) {
@@ -181,27 +169,37 @@ class _ProfileScreenState extends State<ProfileScreen>
           slivers: [
             // App bar with user info
             SliverAppBar(
-              expandedHeight: 320,
-              backgroundColor: Colors.grey[900],
+              expandedHeight: 280,
+              backgroundColor: Colors.black,
               pinned: true,
               elevation: 0,
+              stretch: true,
               actions:
                   _isMyProfile
                       ? [
                         IconButton(
-                          icon: const Icon(Icons.edit, color: Colors.white),
+                          icon: const Icon(
+                            Icons.edit_outlined,
+                            color: Colors.white,
+                          ),
                           onPressed: () {
                             // Navigate to edit profile screen
                           },
                         ),
                         IconButton(
-                          icon: const Icon(Icons.logout, color: Colors.white),
+                          icon: const Icon(
+                            Icons.logout_outlined,
+                            color: Colors.white,
+                          ),
                           onPressed: _signOut,
                         ),
                       ]
                       : [
                         IconButton(
-                          icon: const Icon(Icons.share, color: Colors.white),
+                          icon: const Icon(
+                            Icons.share_outlined,
+                            color: Colors.white,
+                          ),
                           onPressed: () {
                             // Share profile
                           },
@@ -217,20 +215,11 @@ class _ProfileScreenState extends State<ProfileScreen>
               delegate: _SliverAppBarDelegate(
                 TabBar(
                   controller: _tabController,
-                  indicatorColor: Colors.blue[400],
-                  indicatorWeight: 3,
+                  indicatorColor: Colors.white,
+                  indicatorWeight: 2,
                   labelColor: Colors.white,
                   unselectedLabelColor: Colors.grey[500],
-                  tabs: [
-                    const Tab(
-                      icon: Icon(Icons.photo_library),
-                      text: 'Uploaded',
-                    ),
-                    Tab(
-                      icon: const Icon(Icons.bookmark),
-                      text: _isMyProfile ? 'Saved' : 'Liked',
-                    ),
-                  ],
+                  tabs: const [Tab(text: 'Spots'), Tab(text: 'Saved')],
                 ),
               ),
               pinned: true,
@@ -247,12 +236,7 @@ class _ProfileScreenState extends State<ProfileScreen>
                         icon: Icons.location_off,
                         message: 'No locations uploaded',
                         actionLabel: _isMyProfile ? 'Upload a Location' : null,
-                        action:
-                            _isMyProfile
-                                ? () {
-                                  // Navigate to create screen
-                                }
-                                : null,
+                        action: _isMyProfile ? () {} : null,
                       )
                       : _buildLocationGrid(_userLocations),
 
@@ -263,9 +247,7 @@ class _ProfileScreenState extends State<ProfileScreen>
                             icon: Icons.bookmark_border,
                             message: 'No saved locations',
                             actionLabel: 'Explore Locations',
-                            action: () {
-                              // Navigate to feed screen
-                            },
+                            action: () {},
                           )
                           : _buildLocationGrid(_savedLocations))
                       : _buildEmptyState(
@@ -281,68 +263,88 @@ class _ProfileScreenState extends State<ProfileScreen>
     );
   }
 
+  Widget _buildLoadingState() {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: const Center(
+        child: CircularProgressIndicator(
+          valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+        ),
+      ),
+    );
+  }
+
   Widget _buildProfileHeader() {
     return Container(
       decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [Colors.blue[900]!.withOpacity(0.7), Colors.black],
-        ),
+        color: Colors.black,
+        image:
+            _user?.photoUrl != null
+                ? DecorationImage(
+                  image: NetworkImage(_user!.photoUrl!),
+                  fit: BoxFit.cover,
+                  opacity: 0.1,
+                )
+                : null,
       ),
       child: SafeArea(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
+            const SizedBox(height: 16),
+
             // Profile picture
-            Container(
-              width: 100,
-              height: 100,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                border: Border.all(color: Colors.white, width: 3),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.3),
-                    blurRadius: 10,
-                    offset: const Offset(0, 5),
-                  ),
-                ],
-              ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(50),
-                child:
-                    _user?.photoUrl != null
-                        ? CachedNetworkImage(
-                          imageUrl: _user!.photoUrl!,
-                          fit: BoxFit.cover,
-                          placeholder:
-                              (context, url) => Container(
-                                color: Colors.grey[850],
-                                child: const Icon(
-                                  Icons.person,
-                                  color: Colors.white70,
-                                  size: 50,
+            Hero(
+              tag: 'profile-${_user!.uid}',
+              child: Container(
+                width: 100,
+                height: 100,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.white, width: 2),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.2),
+                      blurRadius: 10,
+                      offset: const Offset(0, 5),
+                    ),
+                  ],
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(50),
+                  child:
+                      _user?.photoUrl != null
+                          ? CachedNetworkImage(
+                            imageUrl: _user!.photoUrl!,
+                            fit: BoxFit.cover,
+                            placeholder:
+                                (context, url) => Container(
+                                  color: Colors.grey[850],
+                                  child: const Icon(
+                                    Icons.person,
+                                    color: Colors.white70,
+                                    size: 50,
+                                  ),
                                 ),
-                              ),
-                          errorWidget:
-                              (context, url, error) => Container(
-                                color: Colors.grey[850],
-                                child: const Icon(
-                                  Icons.person,
-                                  color: Colors.white70,
-                                  size: 50,
+                            errorWidget:
+                                (context, url, error) => Container(
+                                  color: Colors.grey[850],
+                                  child: const Icon(
+                                    Icons.person,
+                                    color: Colors.white70,
+                                    size: 50,
+                                  ),
                                 ),
-                              ),
-                        )
-                        : Container(
-                          color: Colors.grey[850],
-                          child: const Icon(
-                            Icons.person,
-                            color: Colors.white70,
-                            size: 50,
+                          )
+                          : Container(
+                            color: Colors.grey[850],
+                            child: const Icon(
+                              Icons.person,
+                              color: Colors.white70,
+                              size: 50,
+                            ),
                           ),
-                        ),
+                ),
               ),
             ),
             const SizedBox(height: 16),
@@ -363,34 +365,27 @@ class _ProfileScreenState extends State<ProfileScreen>
               '@${_user?.username}',
               style: TextStyle(color: Colors.grey[300], fontSize: 16),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 24),
 
             // Stats
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                _buildStatItem(
-                  label: 'Locations',
-                  value: _userLocations.length.toString(),
-                ),
-                Container(
-                  height: 30,
-                  width: 1,
-                  color: Colors.grey[700],
-                  margin: const EdgeInsets.symmetric(horizontal: 20),
-                ),
-                _buildStatItem(label: 'Followers', value: '0'),
-                Container(
-                  height: 30,
-                  width: 1,
-                  color: Colors.grey[700],
-                  margin: const EdgeInsets.symmetric(horizontal: 20),
-                ),
-                _buildStatItem(label: 'Following', value: '0'),
-              ],
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  _buildStatItem(
+                    label: 'Spots',
+                    value: _userLocations.length.toString(),
+                  ),
+                  _buildStatDivider(),
+                  _buildStatItem(label: 'Followers', value: '0'),
+                  _buildStatDivider(),
+                  _buildStatItem(label: 'Following', value: '0'),
+                ],
+              ),
             ),
 
-            // Action button
+            // Action button for non-self profiles
             if (!_isMyProfile)
               Container(
                 margin: const EdgeInsets.only(top: 16),
@@ -399,17 +394,21 @@ class _ProfileScreenState extends State<ProfileScreen>
                     // Follow/Unfollow user
                   },
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.blue[600],
-                    foregroundColor: Colors.white,
+                    backgroundColor: Colors.white,
+                    foregroundColor: Colors.black,
+                    elevation: 0,
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(20),
                     ),
                     padding: const EdgeInsets.symmetric(
                       horizontal: 24,
-                      vertical: 8,
+                      vertical: 10,
                     ),
                   ),
-                  child: const Text('Follow'),
+                  child: const Text(
+                    'Follow',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                  ),
                 ),
               ),
           ],
@@ -435,19 +434,22 @@ class _ProfileScreenState extends State<ProfileScreen>
     );
   }
 
+  Widget _buildStatDivider() {
+    return Container(height: 30, width: 1, color: Colors.grey[800]);
+  }
+
   Widget _buildLocationGrid(List<LocationModel> locations) {
     return GridView.builder(
-      padding: const EdgeInsets.all(8),
+      padding: const EdgeInsets.all(4),
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: 2,
         childAspectRatio: 0.8,
-        crossAxisSpacing: 8,
-        mainAxisSpacing: 8,
+        crossAxisSpacing: 4,
+        mainAxisSpacing: 4,
       ),
       itemCount: locations.length,
       itemBuilder: (context, index) {
         final location = locations[index];
-
         return GestureDetector(
           onTap: () {
             Navigator.push(
@@ -455,52 +457,100 @@ class _ProfileScreenState extends State<ProfileScreen>
               MaterialPageRoute(
                 builder: (context) => LocationDetailScreen(location: location),
               ),
-            );
+            ).then((_) => _loadData());
           },
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(12),
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                // Location image
-                CachedNetworkImage(
-                  imageUrl: location.imageUrls.first,
-                  fit: BoxFit.cover,
-                  placeholder:
-                      (context, url) => Container(color: Colors.grey[850]),
-                  errorWidget:
-                      (context, url, error) => Container(
-                        color: Colors.grey[850],
-                        child: const Icon(
-                          Icons.error_outline,
-                          color: Colors.white70,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              // Location image
+              Hero(
+                tag: 'location-grid-${location.id}',
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: CachedNetworkImage(
+                    imageUrl: location.imageUrls.first,
+                    fit: BoxFit.cover,
+                    placeholder:
+                        (context, url) => Container(color: Colors.grey[900]),
+                    errorWidget:
+                        (context, url, error) => Container(
+                          color: Colors.grey[900],
+                          child: const Icon(
+                            Icons.error_outline,
+                            color: Colors.white54,
+                          ),
                         ),
-                      ),
+                  ),
+                ),
+              ),
+
+              // Distance badge
+              if (location.distance != null)
+                Positioned(
+                  top: 8,
+                  right: 8,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(0.7),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.place_outlined,
+                          color: Colors.white,
+                          size: 12,
+                        ),
+                        const SizedBox(width: 2),
+                        Text(
+                          '${location.distance!.toStringAsFixed(1)} km',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
 
-                // Gradient overlay
-                Container(
+              // Gradient overlay
+              Positioned.fill(
+                child: DecoratedBox(
                   decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(12),
                     gradient: LinearGradient(
                       begin: Alignment.topCenter,
                       end: Alignment.bottomCenter,
                       colors: [
                         Colors.transparent,
-                        Colors.black.withOpacity(0.7),
+                        Colors.black.withOpacity(0.5),
+                        Colors.black.withOpacity(0.8),
                       ],
-                      stops: const [0.6, 1.0],
+                      stops: const [0.6, 0.8, 1.0],
                     ),
                   ),
                 ),
+              ),
 
-                // Location info
-                Positioned(
-                  bottom: 8,
-                  left: 8,
-                  right: 8,
+              // Location info at bottom
+              Positioned(
+                bottom: 0,
+                left: 0,
+                right: 0,
+                child: Padding(
+                  padding: const EdgeInsets.all(12.0),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
                     children: [
+                      // Location name
                       Text(
                         location.name,
                         style: const TextStyle(
@@ -511,27 +561,15 @@ class _ProfileScreenState extends State<ProfileScreen>
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
-                      const SizedBox(height: 2),
+                      const SizedBox(height: 4),
+
+                      // Rating
                       Row(
                         children: [
                           const Icon(Icons.star, color: Colors.amber, size: 12),
-                          const SizedBox(width: 2),
+                          const SizedBox(width: 4),
                           Text(
                             location.visualRating.toStringAsFixed(1),
-                            style: const TextStyle(
-                              color: Colors.white70,
-                              fontSize: 12,
-                            ),
-                          ),
-                          const SizedBox(width: 6),
-                          const Icon(
-                            Icons.volume_up,
-                            color: Colors.green,
-                            size: 12,
-                          ),
-                          const SizedBox(width: 2),
-                          Text(
-                            location.audioRating.toStringAsFixed(1),
                             style: const TextStyle(
                               color: Colors.white70,
                               fontSize: 12,
@@ -542,8 +580,8 @@ class _ProfileScreenState extends State<ProfileScreen>
                     ],
                   ),
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
         );
       },
@@ -567,7 +605,7 @@ class _ProfileScreenState extends State<ProfileScreen>
             Text(
               message,
               style: TextStyle(
-                color: Colors.grey[500],
+                color: Colors.grey[400],
                 fontSize: 18,
                 fontWeight: FontWeight.w500,
               ),
@@ -578,13 +616,21 @@ class _ProfileScreenState extends State<ProfileScreen>
               ElevatedButton(
                 onPressed: action,
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.blue[600],
+                  backgroundColor: Colors.white,
+                  foregroundColor: Colors.black,
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(24),
+                  ),
                   padding: const EdgeInsets.symmetric(
                     horizontal: 24,
                     vertical: 12,
                   ),
                 ),
-                child: Text(actionLabel),
+                child: Text(
+                  actionLabel,
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
               ),
             ],
           ],
@@ -597,7 +643,7 @@ class _ProfileScreenState extends State<ProfileScreen>
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
-        backgroundColor: Colors.black,
+        backgroundColor: Colors.transparent,
         elevation: 0,
         title: const Text('Profile'),
       ),
@@ -628,16 +674,22 @@ class _ProfileScreenState extends State<ProfileScreen>
             ElevatedButton(
               onPressed: _signOut,
               style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.blue[600],
+                backgroundColor: Colors.white,
+                foregroundColor: Colors.black,
+                elevation: 0,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(24),
+                ),
                 padding: const EdgeInsets.symmetric(
                   horizontal: 24,
                   vertical: 12,
                 ),
               ),
-              child: const Text('Sign Out'),
+              child: const Text(
+                'Sign Out',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
             ),
-            const SizedBox(height: 16),
-            TextButton(onPressed: _loadData, child: const Text('Try Again')),
           ],
         ),
       ),
@@ -648,7 +700,7 @@ class _ProfileScreenState extends State<ProfileScreen>
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
-        backgroundColor: Colors.black,
+        backgroundColor: Colors.transparent,
         elevation: 0,
         title: const Text('Profile'),
       ),
@@ -679,13 +731,21 @@ class _ProfileScreenState extends State<ProfileScreen>
             ElevatedButton(
               onPressed: _loadData,
               style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.blue[600],
+                backgroundColor: Colors.white,
+                foregroundColor: Colors.black,
+                elevation: 0,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(24),
+                ),
                 padding: const EdgeInsets.symmetric(
                   horizontal: 24,
                   vertical: 12,
                 ),
               ),
-              child: const Text('Try Again'),
+              child: const Text(
+                'Try Again',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
             ),
           ],
         ),
