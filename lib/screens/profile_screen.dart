@@ -1,4 +1,4 @@
-// File location: lib/screens/profile_screen.dart
+// File: lib/screens/profile_screen.dart
 
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
@@ -9,6 +9,9 @@ import 'package:setscene/services/user_service.dart';
 import 'package:setscene/services/location_service.dart';
 import 'package:setscene/screens/location_detail_screen.dart';
 import 'package:setscene/screens/login_screen.dart';
+import 'package:setscene/screens/profile/edit_profile_screen.dart';
+import 'package:setscene/screens/profile/follow_list_screen.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 class ProfileScreen extends StatefulWidget {
   final String? userId; // If null, shows current user profile
@@ -25,82 +28,151 @@ class _ProfileScreenState extends State<ProfileScreen>
   final UserService _userService = UserService();
   final LocationService _locationService = LocationService();
 
+  // User data
   UserModel? _user;
-  List<LocationModel> _userLocations = [];
-  List<LocationModel> _savedLocations = [];
   bool _isLoading = true;
   bool _isMyProfile = true;
   bool _hasError = false;
   String _errorMessage = '';
+  bool _isFollowing = false;
 
+  // Content data
+  List<LocationModel> _userLocations = [];
+  List<LocationModel> _savedLocations = [];
+  List<LocationModel> _likedLocations = [];
+  int _followersCount = 0;
+  int _followingCount = 0;
+
+  // UI controllers
   late TabController _tabController;
+  final List<String> _tabs = ['Posts', 'Saved', 'Liked'];
+  int _currentTabIndex = 0;
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 2, vsync: this);
-    _loadData();
+    _tabController = TabController(length: _tabs.length, vsync: this);
+    _tabController.addListener(_handleTabChange);
+
+    // Ensure we load data properly after the widget is built
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _loadData();
+    });
   }
 
   @override
   void dispose() {
+    _tabController.removeListener(_handleTabChange);
     _tabController.dispose();
     super.dispose();
   }
 
+  // Handle tab changes
+  void _handleTabChange() {
+    if (_tabController.indexIsChanging) {
+      setState(() {
+        _currentTabIndex = _tabController.index;
+      });
+
+      // Load liked locations when switching to that tab
+      if (_currentTabIndex == 2 && _likedLocations.isEmpty && _isMyProfile) {
+        _loadLikedLocations();
+      }
+    }
+  }
+
+  // Load all user data
   Future<void> _loadData() async {
     if (!mounted) return;
 
     setState(() {
       _isLoading = true;
       _hasError = false;
+      _errorMessage = '';
     });
 
     try {
       // Check if there's a current user
-      final currentUser = _authService.currentUser;
+      final currentUser = Supabase.instance.client.auth.currentUser;
 
       if (currentUser == null) {
         setState(() {
           _isLoading = false;
           _hasError = true;
-          _errorMessage = 'Please sign in to view your profile';
+          _errorMessage = 'Please sign in to view profiles';
         });
         return;
       }
 
       // Determine if this is the current user's profile or someone else's
-      _isMyProfile = widget.userId == null || widget.userId == currentUser.uid;
+      _isMyProfile = widget.userId == null || widget.userId == currentUser.id;
 
-      // Get user data
+      // Get user data - using an optimistic approach to avoid "user not found" errors
       UserModel? userFromDb;
-      if (_isMyProfile) {
-        userFromDb = await _userService.getCurrentUserProfile();
-      } else if (widget.userId != null) {
-        userFromDb = await _userService.getUserById(widget.userId!);
+      String targetUserId = _isMyProfile ? currentUser.id : widget.userId!;
+
+      try {
+        userFromDb = await _userService.getUserById(targetUserId);
+      } catch (e) {
+        print("ProfileScreen: Error fetching user: $e");
+        // If there's an error and it's the current user, create a fallback model
+        if (_isMyProfile) {
+          userFromDb = UserModel(
+            uid: currentUser.id,
+            email: currentUser.email ?? '',
+            fullName:
+                currentUser.userMetadata?['full_name'] as String? ?? 'User',
+            username:
+                currentUser.userMetadata?['username'] as String? ??
+                'user_${currentUser.id.substring(0, 6)}',
+            createdAt: DateTime.now(),
+          );
+        }
       }
 
       if (userFromDb == null) {
-        // Create a fallback user model
-        userFromDb = UserModel(
-          uid: currentUser.uid,
-          email: currentUser.email ?? 'No email',
-          fullName: currentUser.displayName ?? 'SetScene User',
-          username: currentUser.email?.split('@').first ?? 'user',
-          photoUrl: currentUser.photoURL,
-          createdAt: DateTime.now(),
-        );
+        // Create a fallback user model for own profile
+        if (_isMyProfile) {
+          userFromDb = UserModel(
+            uid: currentUser.id,
+            email: currentUser.email ?? '',
+            fullName:
+                currentUser.userMetadata?['full_name'] as String? ?? 'User',
+            username:
+                currentUser.userMetadata?['username'] as String? ??
+                'user_${currentUser.id.substring(0, 6)}',
+            createdAt: DateTime.now(),
+          );
+        } else {
+          setState(() {
+            _isLoading = false;
+            _hasError = true;
+            _errorMessage = 'User not found';
+          });
+          return;
+        }
       }
 
       _user = userFromDb;
 
-      // Load user's created locations
-      if (_user != null) {
-        _userLocations = await _locationService.getUserLocations(_user!.uid);
+      // Load user counts and check follow status - handle errors gracefully for each call
+      try {
+        await _loadLocationData();
+      } catch (e) {
+        print("ProfileScreen: Error loading location data: $e");
+      }
 
-        // Load saved locations if viewing own profile
-        if (_isMyProfile) {
-          _savedLocations = await _locationService.getSavedLocations();
+      try {
+        await _loadFollowCounts();
+      } catch (e) {
+        print("ProfileScreen: Error loading follow counts: $e");
+      }
+
+      if (!_isMyProfile) {
+        try {
+          await _checkFollowStatus();
+        } catch (e) {
+          print("ProfileScreen: Error checking follow status: $e");
         }
       }
 
@@ -110,8 +182,7 @@ class _ProfileScreenState extends State<ProfileScreen>
         });
       }
     } catch (e) {
-      print('Error loading profile data: $e');
-
+      print("ProfileScreen: General error in _loadData: $e");
       if (mounted) {
         setState(() {
           _isLoading = false;
@@ -122,25 +193,275 @@ class _ProfileScreenState extends State<ProfileScreen>
     }
   }
 
+  // Load user's locations and saved locations
+  Future<void> _loadLocationData() async {
+    try {
+      if (_user != null) {
+        // Load user's created locations
+        _userLocations = await _locationService.getUserLocations(_user!.uid);
+
+        // Load saved locations if viewing own profile
+        if (_isMyProfile) {
+          _savedLocations = await _locationService.getSavedLocations();
+        }
+      }
+    } catch (e) {
+      // Handle error silently
+      print('Error loading location data: $e');
+    }
+  }
+
+  // Load liked locations
+  Future<void> _loadLikedLocations() async {
+    try {
+      if (_user != null && _isMyProfile) {
+        setState(() {
+          _isLoading = true;
+        });
+
+        _likedLocations = await _locationService.getLikedLocations();
+
+        if (mounted) {
+          setState(() {
+            _isLoading = false;
+          });
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
+  // Load follower and following counts
+  Future<void> _loadFollowCounts() async {
+    try {
+      if (_user != null) {
+        final counts = await _userService.getFollowCounts(_user!.uid);
+        _followersCount = counts['followers'] ?? 0;
+        _followingCount = counts['following'] ?? 0;
+      }
+    } catch (e) {
+      // Handle error silently
+      print('Error loading follow counts: $e');
+    }
+  }
+
+  // Check if current user is following the profile user
+  Future<void> _checkFollowStatus() async {
+    try {
+      if (_user != null && !_isMyProfile) {
+        final currentUserId = Supabase.instance.client.auth.currentUser?.id;
+        if (currentUserId != null) {
+          _isFollowing = await _userService.isFollowing(
+            currentUserId,
+            _user!.uid,
+          );
+        }
+      }
+    } catch (e) {
+      // Handle error silently
+      print('Error checking follow status: $e');
+    }
+  }
+
+  // Handle follow/unfollow
+  Future<void> _toggleFollow() async {
+    if (_user == null || _isMyProfile) return;
+
+    try {
+      setState(() {
+        // Optimistically update UI
+        _isFollowing = !_isFollowing;
+        _followersCount += _isFollowing ? 1 : -1;
+      });
+
+      final bool success =
+          _isFollowing
+              ? await _userService.followUser(_user!.uid)
+              : await _userService.unfollowUser(_user!.uid);
+
+      if (!success && mounted) {
+        // Revert on failure
+        setState(() {
+          _isFollowing = !_isFollowing;
+          _followersCount += _isFollowing ? 1 : -1;
+        });
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Error updating follow status')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        // Revert on error
+        setState(() {
+          _isFollowing = !_isFollowing;
+          _followersCount += _isFollowing ? 1 : -1;
+        });
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Error updating follow status')),
+        );
+      }
+    }
+  }
+
+  // Delete a location
+  Future<void> _deleteLocation(LocationModel location) async {
+    try {
+      // Show confirmation dialog
+      final bool? confirm = await showDialog<bool>(
+        context: context,
+        builder:
+            (context) => AlertDialog(
+              backgroundColor: Colors.grey[900],
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+              title: const Text(
+                'Delete Location',
+                style: TextStyle(color: Colors.white),
+              ),
+              content: const Text(
+                'Are you sure you want to delete this location? This action cannot be undone.',
+                style: TextStyle(color: Colors.white70),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(false),
+                  child: const Text('Cancel'),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(true),
+                  style: TextButton.styleFrom(foregroundColor: Colors.red),
+                  child: const Text('Delete'),
+                ),
+              ],
+            ),
+      );
+
+      if (confirm != true) return;
+
+      // Show loading
+      setState(() {
+        _isLoading = true;
+      });
+
+      // Delete the location
+      final success = await _locationService.deleteLocation(location.id);
+
+      if (success) {
+        // Reload data
+        await _loadLocationData();
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Location deleted successfully')),
+          );
+        }
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Failed to delete location'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
+
+      setState(() {
+        _isLoading = false;
+      });
+    } catch (e) {
+      setState(() {
+        _isLoading = false;
+      });
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
+  // Navigate to location edit screen
+  Future<void> _editLocation(LocationModel location) async {
+    // Show a snackbar that this feature is coming soon
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('Edit feature coming soon')));
+  }
+
+  // Navigate to followers or following list
+  void _navigateToFollowList(FollowScreenType type) {
+    if (_user == null) return;
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder:
+            (context) => FollowListScreen(
+              userId: _user!.uid,
+              type: type,
+              username: _user!.username,
+            ),
+      ),
+    ).then((_) => _loadFollowCounts());
+  }
+
+  // Navigate to edit profile screen
+  Future<void> _navigateToEditProfile() async {
+    if (_user == null) return;
+
+    final result = await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (context) => EditProfileScreen(user: _user!)),
+    );
+
+    if (result == true) {
+      _loadData(); // Reload data if profile was updated
+    }
+  }
+
+  // Handle sign out
   Future<void> _signOut() async {
     try {
+      setState(() {
+        _isLoading = true;
+      });
+
       await _authService.signOut();
 
       // Navigate to login screen
       if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+
         Navigator.of(context).pushAndRemoveUntil(
           MaterialPageRoute(builder: (context) => const LoginScreen()),
           (route) => false,
         );
       }
     } catch (e) {
-      print('Error signing out: $e');
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Error signing out. Please try again.'),
-          backgroundColor: Colors.red,
-        ),
-      );
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Error signing out'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 
@@ -158,200 +479,209 @@ class _ProfileScreenState extends State<ProfileScreen>
       return _buildNoUserScreen();
     }
 
+    // Use SafeArea to prevent the bottom overflow
     return Scaffold(
       backgroundColor: Colors.black,
-      body: RefreshIndicator(
-        onRefresh: _loadData,
-        color: Colors.blue[400],
-        backgroundColor: Colors.grey[900],
-        child: CustomScrollView(
-          physics: const AlwaysScrollableScrollPhysics(),
-          slivers: [
-            // App bar with user info
+      body: NestedScrollView(
+        headerSliverBuilder: (context, innerBoxIsScrolled) {
+          return [
             SliverAppBar(
-              expandedHeight: 280,
-              backgroundColor: Colors.black,
+              expandedHeight: 450.0,
+              floating: false,
               pinned: true,
+              backgroundColor: Colors.black,
               elevation: 0,
-              stretch: true,
-              actions:
-                  _isMyProfile
-                      ? [
-                        IconButton(
-                          icon: const Icon(
-                            Icons.edit_outlined,
-                            color: Colors.white,
-                          ),
-                          onPressed: () {
-                            // Navigate to edit profile screen
-                          },
-                        ),
-                        IconButton(
-                          icon: const Icon(
-                            Icons.logout_outlined,
-                            color: Colors.white,
-                          ),
-                          onPressed: _signOut,
-                        ),
-                      ]
-                      : [
-                        IconButton(
-                          icon: const Icon(
-                            Icons.share_outlined,
-                            color: Colors.white,
-                          ),
-                          onPressed: () {
-                            // Share profile
-                          },
-                        ),
-                      ],
               flexibleSpace: FlexibleSpaceBar(
                 background: _buildProfileHeader(),
               ),
+              actions: [
+                if (_isMyProfile)
+                  IconButton(
+                    icon: const Icon(Icons.logout, color: Colors.white),
+                    onPressed: () {
+                      showDialog(
+                        context: context,
+                        builder:
+                            (context) => AlertDialog(
+                              backgroundColor: Colors.grey[900],
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                              title: const Text(
+                                'Sign Out',
+                                style: TextStyle(color: Colors.white),
+                              ),
+                              content: const Text(
+                                'Are you sure you want to sign out?',
+                                style: TextStyle(color: Colors.white70),
+                              ),
+                              actions: [
+                                TextButton(
+                                  onPressed: () => Navigator.pop(context),
+                                  child: const Text('Cancel'),
+                                ),
+                                ElevatedButton(
+                                  onPressed: () {
+                                    Navigator.pop(context);
+                                    _signOut();
+                                  },
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: Colors.white,
+                                    foregroundColor: Colors.black,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                  ),
+                                  child: const Text('Sign Out'),
+                                ),
+                              ],
+                            ),
+                      );
+                    },
+                  ),
+                if (!_isMyProfile)
+                  IconButton(
+                    icon: const Icon(Icons.share_outlined, color: Colors.white),
+                    onPressed: () {
+                      // Share profile functionality
+                    },
+                  ),
+              ],
             ),
-
-            // Tab bar
             SliverPersistentHeader(
               delegate: _SliverAppBarDelegate(
                 TabBar(
                   controller: _tabController,
                   indicatorColor: Colors.white,
-                  indicatorWeight: 2,
                   labelColor: Colors.white,
-                  unselectedLabelColor: Colors.grey[500],
-                  tabs: const [Tab(text: 'Spots'), Tab(text: 'Saved')],
+                  unselectedLabelColor: Colors.grey[600],
+                  indicatorWeight: 3,
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  indicatorSize: TabBarIndicatorSize.label,
+                  labelStyle: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
+                  ),
+                  unselectedLabelStyle: const TextStyle(
+                    fontWeight: FontWeight.normal,
+                    fontSize: 16,
+                  ),
+                  tabs:
+                      _isMyProfile
+                          ? _tabs.map((tab) => Tab(text: tab)).toList()
+                          : [Tab(text: _tabs[0])],
                 ),
+                color: Colors.black,
               ),
               pinned: true,
             ),
+          ];
+        },
+        body: TabBarView(
+          controller: _tabController,
+          children: [
+            // Posts Tab
+            _buildLocationsGrid(_userLocations, canDelete: _isMyProfile),
 
-            // Tab content
-            SliverFillRemaining(
-              child: TabBarView(
-                controller: _tabController,
-                children: [
-                  // Uploaded locations
-                  _userLocations.isEmpty
-                      ? _buildEmptyState(
-                        icon: Icons.location_off,
-                        message: 'No locations uploaded',
-                        actionLabel: _isMyProfile ? 'Upload a Location' : null,
-                        action: _isMyProfile ? () {} : null,
-                      )
-                      : _buildLocationGrid(_userLocations),
+            // Saved Tab (only for current user)
+            if (_isMyProfile) _buildLocationsGrid(_savedLocations),
 
-                  // Saved/Liked locations
-                  _isMyProfile
-                      ? (_savedLocations.isEmpty
-                          ? _buildEmptyState(
-                            icon: Icons.bookmark_border,
-                            message: 'No saved locations',
-                            actionLabel: 'Explore Locations',
-                            action: () {},
-                          )
-                          : _buildLocationGrid(_savedLocations))
-                      : _buildEmptyState(
-                        icon: Icons.favorite_border,
-                        message: 'Liked locations not available',
-                      ),
-                ],
-              ),
-            ),
+            // Liked Tab (only for current user)
+            if (_isMyProfile) _buildLocationsGrid(_likedLocations),
           ],
         ),
       ),
-    );
-  }
-
-  Widget _buildLoadingState() {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: const Center(
-        child: CircularProgressIndicator(
-          valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-        ),
-      ),
+      floatingActionButton:
+          _isMyProfile
+              ? FloatingActionButton(
+                onPressed: _navigateToEditProfile,
+                backgroundColor: Colors.white,
+                foregroundColor: Colors.black,
+                elevation: 4,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: const Icon(Icons.edit, color: Colors.black),
+              )
+              : null,
     );
   }
 
   Widget _buildProfileHeader() {
     return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.only(bottom: 16),
       decoration: BoxDecoration(
-        color: Colors.black,
-        image:
-            _user?.photoUrl != null
-                ? DecorationImage(
-                  image: NetworkImage(_user!.photoUrl!),
-                  fit: BoxFit.cover,
-                  opacity: 0.1,
-                )
-                : null,
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [Colors.grey[900]!.withOpacity(0.6), Colors.black],
+          stops: const [0.2, 1.0],
+        ),
       ),
       child: SafeArea(
         child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisAlignment: MainAxisAlignment.end,
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            const SizedBox(height: 16),
+            const SizedBox(height: 20),
 
             // Profile picture
-            Hero(
-              tag: 'profile-${_user!.uid}',
-              child: Container(
-                width: 100,
-                height: 100,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  border: Border.all(color: Colors.white, width: 2),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.2),
-                      blurRadius: 10,
-                      offset: const Offset(0, 5),
-                    ),
-                  ],
-                ),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(50),
-                  child:
-                      _user?.photoUrl != null
-                          ? CachedNetworkImage(
-                            imageUrl: _user!.photoUrl!,
-                            fit: BoxFit.cover,
-                            placeholder:
-                                (context, url) => Container(
-                                  color: Colors.grey[850],
-                                  child: const Icon(
-                                    Icons.person,
-                                    color: Colors.white70,
-                                    size: 50,
-                                  ),
+            Container(
+              width: 110,
+              height: 110,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.grey[850],
+                border: Border.all(color: Colors.white, width: 3),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.3),
+                    blurRadius: 12,
+                    offset: const Offset(0, 5),
+                  ),
+                ],
+              ),
+              child: ClipOval(
+                child:
+                    _user?.photoUrl != null && _user!.photoUrl!.isNotEmpty
+                        ? CachedNetworkImage(
+                          imageUrl: _user!.photoUrl!,
+                          fit: BoxFit.cover,
+                          placeholder:
+                              (context, url) => Container(
+                                color: Colors.grey[850],
+                                child: const Icon(
+                                  Icons.person,
+                                  color: Colors.white70,
+                                  size: 50,
                                 ),
-                            errorWidget:
-                                (context, url, error) => Container(
-                                  color: Colors.grey[850],
-                                  child: const Icon(
-                                    Icons.person,
-                                    color: Colors.white70,
-                                    size: 50,
-                                  ),
+                              ),
+                          errorWidget:
+                              (context, url, error) => Container(
+                                color: Colors.grey[850],
+                                child: const Icon(
+                                  Icons.person,
+                                  color: Colors.white70,
+                                  size: 50,
                                 ),
-                          )
-                          : Container(
-                            color: Colors.grey[850],
-                            child: const Icon(
-                              Icons.person,
-                              color: Colors.white70,
-                              size: 50,
-                            ),
+                              ),
+                        )
+                        : Container(
+                          color: Colors.grey[850],
+                          child: const Icon(
+                            Icons.person,
+                            color: Colors.white70,
+                            size: 50,
                           ),
-                ),
+                        ),
               ),
             ),
             const SizedBox(height: 16),
 
             // User name
             Text(
-              _user?.fullName ?? 'User',
+              _user!.fullName,
               style: const TextStyle(
                 color: Colors.white,
                 fontSize: 24,
@@ -360,54 +690,125 @@ class _ProfileScreenState extends State<ProfileScreen>
             ),
             const SizedBox(height: 4),
 
-            // Username
-            Text(
-              '@${_user?.username}',
-              style: TextStyle(color: Colors.grey[300], fontSize: 16),
-            ),
-            const SizedBox(height: 24),
-
-            // Stats
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24),
+            // Username with badge
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: Colors.grey[900],
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: Colors.grey[800]!),
+              ),
               child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  _buildStatItem(
-                    label: 'Spots',
-                    value: _userLocations.length.toString(),
+                  Text(
+                    '@${_user!.username}',
+                    style: TextStyle(color: Colors.grey[400], fontSize: 15),
                   ),
-                  _buildStatDivider(),
-                  _buildStatItem(label: 'Followers', value: '0'),
-                  _buildStatDivider(),
-                  _buildStatItem(label: 'Following', value: '0'),
+                  if (_isMyProfile) ...[
+                    const SizedBox(width: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.blue.withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: const Text(
+                        'YOU',
+                        style: TextStyle(
+                          color: Colors.blue,
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
 
-            // Action button for non-self profiles
+            // Bio if available
+            if (_user!.bio != null && _user!.bio!.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 24),
+                child: Text(
+                  _user!.bio!,
+                  style: TextStyle(color: Colors.grey[300], fontSize: 15),
+                  textAlign: TextAlign.center,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+
+            const SizedBox(height: 20),
+
+            // Stats row
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              child: Container(
+                height: 70,
+                decoration: BoxDecoration(
+                  color: Colors.grey[900]!.withOpacity(0.5),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: Colors.grey[800]!.withOpacity(0.5)),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    _buildStatItem(
+                      label: 'Spots',
+                      value: _user!.postsCount.toString(),
+                    ),
+                    _buildVerticalDivider(),
+                    _buildStatItem(
+                      label: 'Followers',
+                      value: _followersCount.toString(),
+                      onTap:
+                          () =>
+                              _navigateToFollowList(FollowScreenType.followers),
+                    ),
+                    _buildVerticalDivider(),
+                    _buildStatItem(
+                      label: 'Following',
+                      value: _followingCount.toString(),
+                      onTap:
+                          () =>
+                              _navigateToFollowList(FollowScreenType.following),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 20),
+
+            // Action button for other profiles
             if (!_isMyProfile)
-              Container(
-                margin: const EdgeInsets.only(top: 16),
+              SizedBox(
+                width: 200,
                 child: ElevatedButton(
-                  onPressed: () {
-                    // Follow/Unfollow user
-                  },
+                  onPressed: _toggleFollow,
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.white,
-                    foregroundColor: Colors.black,
-                    elevation: 0,
+                    backgroundColor:
+                        _isFollowing ? Colors.grey[800] : Colors.blue[600],
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(20),
+                      borderRadius: BorderRadius.circular(12),
                     ),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 24,
-                      vertical: 10,
-                    ),
+                    elevation: 2,
                   ),
-                  child: const Text(
-                    'Follow',
-                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                  child: Text(
+                    _isFollowing ? 'Following' : 'Follow',
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                 ),
               ),
@@ -417,222 +818,380 @@ class _ProfileScreenState extends State<ProfileScreen>
     );
   }
 
-  Widget _buildStatItem({required String label, required String value}) {
-    return Column(
-      children: [
-        Text(
-          value,
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 18,
-            fontWeight: FontWeight.bold,
-          ),
+  Widget _buildVerticalDivider() {
+    return Container(height: 40, width: 1, color: Colors.grey[800]);
+  }
+
+  Widget _buildStatItem({
+    required String label,
+    required String value,
+    VoidCallback? onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(16),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(
+              value,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 22,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              label,
+              style: TextStyle(color: Colors.grey[400], fontSize: 14),
+            ),
+          ],
         ),
-        const SizedBox(height: 4),
-        Text(label, style: TextStyle(color: Colors.grey[400], fontSize: 12)),
-      ],
+      ),
     );
   }
 
-  Widget _buildStatDivider() {
-    return Container(height: 30, width: 1, color: Colors.grey[800]);
-  }
-
-  Widget _buildLocationGrid(List<LocationModel> locations) {
-    return GridView.builder(
-      padding: const EdgeInsets.all(4),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 2,
-        childAspectRatio: 0.8,
-        crossAxisSpacing: 4,
-        mainAxisSpacing: 4,
-      ),
-      itemCount: locations.length,
-      itemBuilder: (context, index) {
-        final location = locations[index];
-        return GestureDetector(
-          onTap: () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (context) => LocationDetailScreen(location: location),
+  Widget _buildLocationsGrid(
+    List<LocationModel> locations, {
+    bool canDelete = false,
+  }) {
+    if (locations.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              _currentTabIndex == 0
+                  ? Icons.photo_camera_outlined
+                  : (_currentTabIndex == 1
+                      ? Icons.bookmark_outline
+                      : Icons.favorite_outline),
+              size: 70,
+              color: Colors.grey[700],
+            ),
+            const SizedBox(height: 16),
+            Text(
+              _currentTabIndex == 0
+                  ? 'No posts yet'
+                  : (_currentTabIndex == 1
+                      ? 'No saved locations'
+                      : 'No liked locations'),
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 20,
+                fontWeight: FontWeight.w500,
               ),
-            ).then((_) => _loadData());
-          },
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              // Location image
-              Hero(
-                tag: 'location-grid-${location.id}',
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(12),
-                  child: CachedNetworkImage(
-                    imageUrl: location.imageUrls.first,
-                    fit: BoxFit.cover,
-                    placeholder:
-                        (context, url) => Container(color: Colors.grey[900]),
-                    errorWidget:
-                        (context, url, error) => Container(
-                          color: Colors.grey[900],
-                          child: const Icon(
-                            Icons.error_outline,
-                            color: Colors.white54,
+            ),
+            const SizedBox(height: 12),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 40),
+              child: Text(
+                _currentTabIndex == 0
+                    ? 'Share your favorite filming spots with the community'
+                    : (_currentTabIndex == 1
+                        ? 'Save locations for easy access later'
+                        : 'Like locations you enjoy'),
+                style: TextStyle(color: Colors.grey[500], fontSize: 14),
+                textAlign: TextAlign.center,
+              ),
+            ),
+            if (_currentTabIndex == 0 && _isMyProfile) ...[
+              const SizedBox(height: 24),
+              ElevatedButton.icon(
+                onPressed: () {
+                  // Switch to create tab
+                  Navigator.of(context).popUntil((route) => route.isFirst);
+                  // Navigate to create tab (index 2)
+                },
+                icon: const Icon(Icons.add_location_alt),
+                label: const Text('Add Location'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.blue[600],
+                  foregroundColor: Colors.white,
+                ),
+              ),
+            ],
+          ],
+        ),
+      );
+    }
+
+    return Container(
+      color: Colors.black,
+      child: GridView.builder(
+        padding: const EdgeInsets.only(
+          left: 16,
+          right: 16,
+          top: 8,
+          bottom: 100, // Add extra bottom padding to avoid overlapping nav bar
+        ),
+        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: 3,
+          childAspectRatio: 1.0,
+          crossAxisSpacing: 8,
+          mainAxisSpacing: 8,
+        ),
+        itemCount: locations.length,
+        itemBuilder: (context, index) {
+          final location = locations[index];
+          return GestureDetector(
+            onTap: () => _navigateToLocation(location),
+            onLongPress:
+                canDelete && location.creatorId == _user?.uid
+                    ? () => _showLocationOptions(location)
+                    : null,
+            child: Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(12),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.3),
+                    blurRadius: 5,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    // Location image
+                    CachedNetworkImage(
+                      imageUrl: location.imageUrls.first,
+                      fit: BoxFit.cover,
+                      placeholder:
+                          (context, url) => Container(
+                            color: Colors.grey[850],
+                            child: const Center(
+                              child: SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  valueColor: AlwaysStoppedAnimation<Color>(
+                                    Colors.white60,
+                                  ),
+                                  strokeWidth: 2,
+                                ),
+                              ),
+                            ),
+                          ),
+                      errorWidget:
+                          (context, url, error) => Container(
+                            color: Colors.grey[850],
+                            child: const Icon(
+                              Icons.error_outline,
+                              color: Colors.white54,
+                            ),
+                          ),
+                    ),
+
+                    // Gradient overlay
+                    Positioned.fill(
+                      child: Container(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [
+                              Colors.transparent,
+                              Colors.black.withOpacity(0.7),
+                            ],
+                            stops: const [0.7, 1.0],
                           ),
                         ),
-                  ),
-                ),
-              ),
-
-              // Distance badge
-              if (location.distance != null)
-                Positioned(
-                  top: 8,
-                  right: 8,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 4,
-                    ),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withOpacity(0.7),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(
-                          Icons.place_outlined,
-                          color: Colors.white,
-                          size: 12,
-                        ),
-                        const SizedBox(width: 2),
-                        Text(
-                          '${location.distance!.toStringAsFixed(1)} km',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 10,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-
-              // Gradient overlay
-              Positioned.fill(
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(12),
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: [
-                        Colors.transparent,
-                        Colors.black.withOpacity(0.5),
-                        Colors.black.withOpacity(0.8),
-                      ],
-                      stops: const [0.6, 0.8, 1.0],
-                    ),
-                  ),
-                ),
-              ),
-
-              // Location info at bottom
-              Positioned(
-                bottom: 0,
-                left: 0,
-                right: 0,
-                child: Padding(
-                  padding: const EdgeInsets.all(12.0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      // Location name
-                      Text(
-                        location.name,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 14,
-                          fontWeight: FontWeight.bold,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
                       ),
-                      const SizedBox(height: 4),
+                    ),
 
-                      // Rating
-                      Row(
+                    // Rating info at bottom
+                    Positioned(
+                      bottom: 6,
+                      left: 6,
+                      right: 6,
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          const Icon(Icons.star, color: Colors.amber, size: 12),
-                          const SizedBox(width: 4),
+                          const Icon(
+                            Icons.visibility,
+                            color: Colors.white70,
+                            size: 12,
+                          ),
+                          const SizedBox(width: 3),
                           Text(
                             location.visualRating.toStringAsFixed(1),
                             style: const TextStyle(
                               color: Colors.white70,
-                              fontSize: 12,
+                              fontSize: 10,
                             ),
                           ),
+
+                          const SizedBox(width: 8),
+
+                          if (location.audioUrl != null) ...[
+                            const Icon(
+                              Icons.volume_up,
+                              color: Colors.white70,
+                              size: 12,
+                            ),
+                            const SizedBox(width: 3),
+                            Text(
+                              location.audioRating.toStringAsFixed(1),
+                              style: const TextStyle(
+                                color: Colors.white70,
+                                fontSize: 10,
+                              ),
+                            ),
+                          ],
                         ],
                       ),
-                    ],
+                    ),
+
+                    // Edit/Delete hint if user can modify this location
+                    if (canDelete && location.creatorId == _user?.uid)
+                      Positioned(
+                        top: 4,
+                        right: 4,
+                        child: Container(
+                          padding: const EdgeInsets.all(4),
+                          decoration: BoxDecoration(
+                            color: Colors.grey[900]!.withOpacity(0.7),
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(
+                            Icons.more_horiz,
+                            color: Colors.white,
+                            size: 14,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  void _showLocationOptions(LocationModel location) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.grey[900],
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.only(
+          topLeft: Radius.circular(16),
+          topRight: Radius.circular(16),
+        ),
+      ),
+      builder:
+          (context) => Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 16),
+              // Location name header
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Text(
+                  location.name,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+              const SizedBox(height: 24),
+
+              // Edit option
+              ListTile(
+                leading: const Icon(Icons.edit, color: Colors.white),
+                title: const Text(
+                  'Edit Location',
+                  style: TextStyle(color: Colors.white),
+                ),
+                onTap: () {
+                  Navigator.of(context).pop();
+                  _editLocation(location);
+                },
+              ),
+
+              // Delete option
+              ListTile(
+                leading: const Icon(Icons.delete, color: Colors.red),
+                title: const Text(
+                  'Delete Location',
+                  style: TextStyle(color: Colors.red),
+                ),
+                onTap: () {
+                  Navigator.of(context).pop();
+                  _deleteLocation(location);
+                },
+              ),
+
+              const SizedBox(height: 16),
+
+              // Cancel button
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.grey[800],
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    child: const Text('Cancel'),
                   ),
                 ),
               ),
             ],
           ),
-        );
-      },
     );
   }
 
-  Widget _buildEmptyState({
-    required IconData icon,
-    required String message,
-    String? actionLabel,
-    VoidCallback? action,
-  }) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24.0),
+  void _navigateToLocation(LocationModel location) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => LocationDetailScreen(location: location),
+      ),
+    ).then((_) => _loadData());
+  }
+
+  Widget _buildLoadingState() {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, size: 64, color: Colors.grey[700]),
-            const SizedBox(height: 16),
-            Text(
-              message,
-              style: TextStyle(
-                color: Colors.grey[400],
-                fontSize: 18,
-                fontWeight: FontWeight.w500,
+            Container(
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: Colors.blue.withOpacity(0.1),
+                shape: BoxShape.circle,
               ),
-              textAlign: TextAlign.center,
+              child: const CircularProgressIndicator(
+                valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                strokeWidth: 3,
+              ),
             ),
-            if (actionLabel != null && action != null) ...[
-              const SizedBox(height: 24),
-              ElevatedButton(
-                onPressed: action,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.white,
-                  foregroundColor: Colors.black,
-                  elevation: 0,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(24),
-                  ),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 24,
-                    vertical: 12,
-                  ),
-                ),
-                child: Text(
-                  actionLabel,
-                  style: const TextStyle(fontWeight: FontWeight.bold),
-                ),
-              ),
-            ],
+            const SizedBox(height: 24),
+            Text(
+              'Loading profile...',
+              style: TextStyle(color: Colors.grey[400], fontSize: 16),
+            ),
           ],
         ),
       ),
@@ -647,51 +1206,12 @@ class _ProfileScreenState extends State<ProfileScreen>
         elevation: 0,
         title: const Text('Profile'),
       ),
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.account_circle, size: 80, color: Colors.grey[700]),
-            const SizedBox(height: 24),
-            Text(
-              'No User Found',
-              style: TextStyle(
-                color: Colors.grey[300],
-                fontSize: 22,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-            const SizedBox(height: 12),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 40),
-              child: Text(
-                'There seems to be an issue with your account. Please sign out and sign in again.',
-                style: TextStyle(color: Colors.grey[500], fontSize: 16),
-                textAlign: TextAlign.center,
-              ),
-            ),
-            const SizedBox(height: 32),
-            ElevatedButton(
-              onPressed: _signOut,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.white,
-                foregroundColor: Colors.black,
-                elevation: 0,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(24),
-                ),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 24,
-                  vertical: 12,
-                ),
-              ),
-              child: const Text(
-                'Sign Out',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-            ),
-          ],
-        ),
+      body: _buildEmptyState(
+        Icons.account_circle,
+        'No user found',
+        'Please sign in again to view your profile',
+        'Sign Out',
+        _signOut,
       ),
     );
   }
@@ -704,47 +1224,74 @@ class _ProfileScreenState extends State<ProfileScreen>
         elevation: 0,
         title: const Text('Profile'),
       ),
-      body: Center(
+      body: _buildEmptyState(
+        Icons.error_outline,
+        'Error loading profile',
+        _errorMessage,
+        'Try Again',
+        _loadData,
+      ),
+    );
+  }
+
+  Widget _buildEmptyState(
+    IconData icon,
+    String title,
+    String message,
+    String actionLabel,
+    VoidCallback onAction,
+  ) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24.0),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.error_outline, size: 80, color: Colors.red[400]),
+            Container(
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                color: Colors.grey[900]!.withOpacity(0.3),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(icon, size: 64, color: Colors.white),
+            ),
             const SizedBox(height: 24),
             Text(
-              'Something Went Wrong',
-              style: TextStyle(
-                color: Colors.grey[300],
+              title,
+              style: const TextStyle(
+                color: Colors.white,
                 fontSize: 22,
-                fontWeight: FontWeight.w500,
+                fontWeight: FontWeight.bold,
               ),
+              textAlign: TextAlign.center,
             ),
             const SizedBox(height: 12),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 40),
-              child: Text(
-                _errorMessage,
-                style: TextStyle(color: Colors.grey[500], fontSize: 16),
-                textAlign: TextAlign.center,
-              ),
+            Text(
+              message,
+              style: TextStyle(color: Colors.grey[400], fontSize: 16),
+              textAlign: TextAlign.center,
             ),
             const SizedBox(height: 32),
             ElevatedButton(
-              onPressed: _loadData,
+              onPressed: onAction,
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.white,
                 foregroundColor: Colors.black,
                 elevation: 0,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(24),
-                ),
                 padding: const EdgeInsets.symmetric(
-                  horizontal: 24,
-                  vertical: 12,
+                  horizontal: 32,
+                  vertical: 16,
+                ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
                 ),
               ),
-              child: const Text(
-                'Try Again',
-                style: TextStyle(fontWeight: FontWeight.bold),
+              child: Text(
+                actionLabel,
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
             ),
           ],
@@ -754,11 +1301,12 @@ class _ProfileScreenState extends State<ProfileScreen>
   }
 }
 
-// Tab bar delegate for scrolling behavior
+// Helper class for sticky tab bar
 class _SliverAppBarDelegate extends SliverPersistentHeaderDelegate {
   final TabBar _tabBar;
+  final Color color;
 
-  _SliverAppBarDelegate(this._tabBar);
+  _SliverAppBarDelegate(this._tabBar, {this.color = Colors.black});
 
   @override
   double get minExtent => _tabBar.preferredSize.height;
@@ -772,7 +1320,7 @@ class _SliverAppBarDelegate extends SliverPersistentHeaderDelegate {
     double shrinkOffset,
     bool overlapsContent,
   ) {
-    return Container(color: Colors.black, child: _tabBar);
+    return Container(color: color, child: _tabBar);
   }
 
   @override

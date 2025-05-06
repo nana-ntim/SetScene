@@ -1,36 +1,55 @@
 // File location: lib/services/location_service.dart
 
 import 'dart:io';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:setscene/models/location_model.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:setscene/services/cloudinary_service.dart';
+import 'package:setscene/services/storage_service.dart';
+import 'package:setscene/services/user_service.dart';
 
 class LocationService {
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  final FirebaseAuth _auth = FirebaseAuth.instance;
-  final CloudinaryService _cloudinary = CloudinaryService.instance;
-
-  // Collection references
-  CollectionReference get _locationsRef => _firestore.collection('locations');
-  CollectionReference get _savedLocationsRef =>
-      _firestore.collection('savedLocations');
-  CollectionReference get _likedLocationsRef =>
-      _firestore.collection('likedLocations');
+  final _supabase = Supabase.instance.client;
+  final StorageService _storageService = StorageService();
+  final UserService _userService = UserService();
 
   // Get all locations
-  Future<List<LocationModel>> getLocations() async {
+  Future<List<LocationModel>> getLocations({int limit = 50}) async {
     try {
-      final QuerySnapshot snapshot =
-          await _locationsRef
-              .orderBy('createdAt', descending: true)
-              .limit(50) // Limit for performance
-              .get();
+      final response = await _supabase
+          .from('locations')
+          .select('*, users!creator_id(full_name, username, photo_url)')
+          .order('created_at', ascending: false)
+          .limit(limit);
 
-      return snapshot.docs
-          .map((doc) => LocationModel.fromFirestore(doc))
-          .toList();
+      // Get current user to check like/save status
+      final currentUser = _supabase.auth.currentUser;
+
+      // Transform the response
+      final locations =
+          response.map<LocationModel>((data) {
+            // Extract creator info from the joined users table
+            final userData = data['users'] as Map<String, dynamic>;
+
+            // Merge location data with creator info
+            final Map<String, dynamic> locationData = {
+              ...data,
+              'creator_name': userData['full_name'],
+              'creator_username': userData['username'],
+              'creator_photo_url': userData['photo_url'],
+            };
+
+            return LocationModel.fromMap(locationData);
+          }).toList();
+
+      // Check if current user has liked/saved each location
+      if (currentUser != null) {
+        for (var location in locations) {
+          location.isLiked = await isLocationLiked(location.id);
+          location.isSaved = await isLocationSaved(location.id);
+        }
+      }
+
+      return locations;
     } catch (e) {
       print('Error getting locations: $e');
       return [];
@@ -40,22 +59,48 @@ class LocationService {
   // Get locations by user
   Future<List<LocationModel>> getUserLocations(String userId) async {
     try {
-      final QuerySnapshot snapshot =
-          await _locationsRef
-              .where('creatorId', isEqualTo: userId)
-              .orderBy('createdAt', descending: true)
-              .get();
+      final response = await _supabase
+          .from('locations')
+          .select('*, users!creator_id(full_name, username, photo_url)')
+          .eq('creator_id', userId)
+          .order('created_at', ascending: false);
 
-      return snapshot.docs
-          .map((doc) => LocationModel.fromFirestore(doc))
-          .toList();
+      // Get current user to check like status
+      final currentUser = _supabase.auth.currentUser;
+
+      // Transform the response
+      final locations =
+          response.map<LocationModel>((data) {
+            // Extract creator info from the joined users table
+            final userData = data['users'] as Map<String, dynamic>;
+
+            // Merge location data with creator info
+            final Map<String, dynamic> locationData = {
+              ...data,
+              'creator_name': userData['full_name'],
+              'creator_username': userData['username'],
+              'creator_photo_url': userData['photo_url'],
+            };
+
+            return LocationModel.fromMap(locationData);
+          }).toList();
+
+      // Check like/save status for each location if current user is logged in
+      if (currentUser != null) {
+        for (var location in locations) {
+          location.isLiked = await isLocationLiked(location.id);
+          location.isSaved = await isLocationSaved(location.id);
+        }
+      }
+
+      return locations;
     } catch (e) {
       print('Error getting user locations: $e');
       return [];
     }
   }
 
-  // Create a new location - Enhanced with detailed logging
+  // Create a new location
   Future<String> createLocation({
     required String name,
     required String description,
@@ -70,56 +115,35 @@ class LocationService {
   }) async {
     try {
       print('=== STARTING LOCATION CREATION PROCESS ===');
-      print('Name: $name');
-      print(
-        'Description: ${description.substring(0, description.length > 20 ? 20 : description.length)}...',
-      );
-      print('Address: $address');
-      print('Coordinates: $latitude, $longitude');
-      print('Images count: ${images.length}');
-      print('Audio file: ${audioFile?.path}');
-      print('Visual rating: $visualRating');
-      print('Audio rating: $audioRating');
-      print('Categories: $categories');
 
       // Check if user is logged in
-      final user = _auth.currentUser;
+      final user = _supabase.auth.currentUser;
       if (user == null) {
         print('ERROR: User not logged in');
         throw Exception('User not logged in');
       }
 
-      print('User authenticated: ${user.uid}');
+      print('User authenticated: ${user.id}');
+
+      // Get the user profile to ensure we have the latest info
+      final userProfile = await _userService.getUserById(user.id);
+      if (userProfile == null) {
+        print('ERROR: User profile not found');
+        throw Exception('User profile not found');
+      }
 
       // Generate a unique folder name for this location
       final String timestamp = DateTime.now().millisecondsSinceEpoch.toString();
-      final String folderPath = 'setscene/${user.uid}/locations/$timestamp';
+      final String folderPath = '${user.id}/$timestamp';
 
       print('Folder path for uploads: $folderPath');
       print('Starting image uploads...');
 
-      // Upload images to Cloudinary one by one with detailed logging
-      final List<String> imageUrls = [];
-      for (int i = 0; i < images.length; i++) {
-        try {
-          print('Uploading image ${i + 1}/${images.length}...');
-          final file = images[i];
-          print('Image path: ${file.path}');
-          print('Image size: ${await file.length()} bytes');
-
-          final url = await _cloudinary.uploadFile(file, '$folderPath/images');
-
-          if (url != null) {
-            print('Image ${i + 1} uploaded successfully: $url');
-            imageUrls.add(url);
-          } else {
-            print('ERROR: Image ${i + 1} upload returned null URL');
-          }
-        } catch (e) {
-          print('ERROR: Failed to upload image ${i + 1}: $e');
-          // Continue with other images even if one fails
-        }
-      }
+      // Upload images to Supabase Storage
+      final List<String> imageUrls = await _storageService.uploadImages(
+        images,
+        folderPath,
+      );
 
       print(
         'Uploaded ${imageUrls.length}/${images.length} images successfully',
@@ -130,14 +154,7 @@ class LocationService {
       if (audioFile != null) {
         try {
           print('Uploading audio file...');
-          print('Audio path: ${audioFile.path}');
-          print('Audio size: ${await audioFile.length()} bytes');
-
-          audioUrl = await _cloudinary.uploadFile(
-            audioFile,
-            '$folderPath/audio',
-          );
-
+          audioUrl = await _storageService.uploadAudio(audioFile, folderPath);
           if (audioUrl != null) {
             print('Audio upload successful: $audioUrl');
           } else {
@@ -145,36 +162,46 @@ class LocationService {
           }
         } catch (e) {
           print('ERROR: Failed to upload audio: $e');
-          // Continue without audio if it fails
         }
       }
 
-      // Create location document
-      print('Creating Firestore document...');
+      // Create location in database
+      print('Creating location in database...');
+
       final locationData = {
         'name': name,
         'description': description,
         'address': address,
         'latitude': latitude,
         'longitude': longitude,
-        'imageUrls': imageUrls,
-        'audioUrl': audioUrl,
-        'visualRating': visualRating,
-        'audioRating': audioRating,
+        'image_urls': imageUrls,
+        'audio_url': audioUrl,
+        'visual_rating': visualRating,
+        'audio_rating': audioRating,
         'categories': categories,
-        'creatorId': user.uid,
-        'creatorName': user.displayName ?? 'Anonymous',
-        'creatorPhotoUrl': user.photoURL,
-        'createdAt': FieldValue.serverTimestamp(),
+        'creator_id': user.id,
       };
 
-      print('Location data prepared, saving to Firestore...');
-      // Add to Firestore
-      final DocumentReference docRef = await _locationsRef.add(locationData);
+      // Insert location
+      final response =
+          await _supabase
+              .from('locations')
+              .insert(locationData)
+              .select('id')
+              .single();
 
-      print('Location created successfully with ID: ${docRef.id}');
+      final locationId = response['id'];
+
+      // Increment user's post count
+      await _supabase
+          .from('users')
+          .update({'posts_count': userProfile.postsCount + 1})
+          .eq('id', user.id);
+
+      print('Location created successfully with ID: $locationId');
       print('=== LOCATION CREATION PROCESS COMPLETED ===');
-      return docRef.id;
+
+      return locationId;
     } catch (e) {
       print('=== ERROR CREATING LOCATION: $e ===');
       print('Stack trace: ${StackTrace.current}');
@@ -189,13 +216,29 @@ class LocationService {
     required double radius,
   }) async {
     try {
-      // Get all locations (in a real app, you would use geolocation queries)
-      final QuerySnapshot snapshot = await _locationsRef.get();
+      // Get all locations
+      final response = await _supabase
+          .from('locations')
+          .select('*, users!creator_id(full_name, username, photo_url)');
 
-      // Filter and calculate distances
+      // Get current user to check like/save status
+      final currentUser = _supabase.auth.currentUser;
+
+      // Transform the response
       final locations =
-          snapshot.docs.map((doc) {
-            final location = LocationModel.fromFirestore(doc);
+          response.map<LocationModel>((data) {
+            // Extract creator info from the joined users table
+            final userData = data['users'] as Map<String, dynamic>;
+
+            // Merge location data with creator info
+            final Map<String, dynamic> locationData = {
+              ...data,
+              'creator_name': userData['full_name'],
+              'creator_username': userData['username'],
+              'creator_photo_url': userData['photo_url'],
+            };
+
+            final location = LocationModel.fromMap(locationData);
 
             // Calculate distance
             final distance =
@@ -211,6 +254,14 @@ class LocationService {
             return location.copyWith(distance: distance);
           }).toList();
 
+      // Check like/save status for each location if current user is logged in
+      if (currentUser != null) {
+        for (var location in locations) {
+          location.isLiked = await isLocationLiked(location.id);
+          location.isSaved = await isLocationSaved(location.id);
+        }
+      }
+
       // Filter by radius and sort by distance
       return locations
           .where((location) => location.distance! <= radius)
@@ -225,13 +276,34 @@ class LocationService {
   // Get location by ID
   Future<LocationModel?> getLocationById(String id) async {
     try {
-      final DocumentSnapshot doc = await _locationsRef.doc(id).get();
+      final response =
+          await _supabase
+              .from('locations')
+              .select('*, users!creator_id(full_name, username, photo_url)')
+              .eq('id', id)
+              .single();
 
-      if (doc.exists) {
-        return LocationModel.fromFirestore(doc);
+      // Extract creator info from the joined users table
+      final userData = response['users'] as Map<String, dynamic>;
+
+      // Merge location data with creator info
+      final Map<String, dynamic> locationData = {
+        ...response,
+        'creator_name': userData['full_name'],
+        'creator_username': userData['username'],
+        'creator_photo_url': userData['photo_url'],
+      };
+
+      final location = LocationModel.fromMap(locationData);
+
+      // Check if current user has liked/saved this location
+      final currentUser = _supabase.auth.currentUser;
+      if (currentUser != null) {
+        location.isLiked = await isLocationLiked(id);
+        location.isSaved = await isLocationSaved(id);
       }
 
-      return null;
+      return location;
     } catch (e) {
       print('Error getting location by ID: $e');
       return null;
@@ -242,30 +314,60 @@ class LocationService {
   Future<List<LocationModel>> getSavedLocations() async {
     try {
       // Check if user is logged in
-      final user = _auth.currentUser;
+      final user = _supabase.auth.currentUser;
       if (user == null) {
         return [];
       }
 
       // Get saved location IDs
-      final QuerySnapshot snapshot =
-          await _savedLocationsRef.where('userId', isEqualTo: user.uid).get();
+      final savedResponse = await _supabase
+          .from('saved_locations')
+          .select('location_id, saved_at')
+          .eq('user_id', user.id)
+          .order('saved_at', ascending: false);
 
       // Get location details for each saved location
       final List<LocationModel> locations = [];
 
-      for (final doc in snapshot.docs) {
-        final data = doc.data() as Map<String, dynamic>;
-        final locationId = data['locationId'];
-        final savedAt = (data['savedAt'] as Timestamp).toDate();
+      for (final savedItem in savedResponse) {
+        final locationId = savedItem['location_id'];
+        final savedAt = DateTime.parse(savedItem['saved_at']);
 
-        final location = await getLocationById(locationId);
-        if (location != null) {
+        try {
+          final locationResponse =
+              await _supabase
+                  .from('locations')
+                  .select('*, users!creator_id(full_name, username, photo_url)')
+                  .eq('id', locationId)
+                  .single();
+
+          // Extract creator info from the joined users table
+          final userData = locationResponse['users'] as Map<String, dynamic>;
+
+          // Merge location data with creator info
+          final Map<String, dynamic> locationData = {
+            ...locationResponse,
+            'creator_name': userData['full_name'],
+            'creator_username': userData['username'],
+            'creator_photo_url': userData['photo_url'],
+          };
+
+          final location = LocationModel.fromMap(locationData);
+
           // Check if location is liked
           final isLiked = await isLocationLiked(locationId);
 
           // Add to list with saved date
-          locations.add(location.copyWith(savedAt: savedAt, isLiked: isLiked));
+          locations.add(
+            location.copyWith(
+              savedAt: savedAt,
+              isLiked: isLiked,
+              isSaved: true,
+            ),
+          );
+        } catch (e) {
+          print('Error getting location $locationId: $e');
+          // Skip this location and continue
         }
       }
 
@@ -276,46 +378,181 @@ class LocationService {
     }
   }
 
-  // Save a location
+  // Get liked locations for current user
+  Future<List<LocationModel>> getLikedLocations() async {
+    try {
+      // Check if user is logged in
+      final user = _supabase.auth.currentUser;
+      if (user == null) {
+        return [];
+      }
+
+      // Get liked location IDs
+      final likedResponse = await _supabase
+          .from('liked_locations')
+          .select('location_id, liked_at')
+          .eq('user_id', user.id)
+          .order('liked_at', ascending: false);
+
+      // Get location details for each liked location
+      final List<LocationModel> locations = [];
+
+      for (final likedItem in likedResponse) {
+        final locationId = likedItem['location_id'];
+        final likedAt = DateTime.parse(likedItem['liked_at']);
+
+        try {
+          final locationResponse =
+              await _supabase
+                  .from('locations')
+                  .select('*, users!creator_id(full_name, username, photo_url)')
+                  .eq('id', locationId)
+                  .single();
+
+          // Extract creator info from the joined users table
+          final userData = locationResponse['users'] as Map<String, dynamic>;
+
+          // Merge location data with creator info
+          final Map<String, dynamic> locationData = {
+            ...locationResponse,
+            'creator_name': userData['full_name'],
+            'creator_username': userData['username'],
+            'creator_photo_url': userData['photo_url'],
+          };
+
+          final location = LocationModel.fromMap(locationData);
+
+          // Check if location is saved
+          final isSaved = await isLocationSaved(locationId);
+
+          // Add to list with liked date
+          locations.add(
+            location.copyWith(
+              likedAt: likedAt,
+              isLiked: true,
+              isSaved: isSaved,
+            ),
+          );
+        } catch (e) {
+          print('Error getting location $locationId: $e');
+          // Skip this location and continue
+        }
+      }
+
+      return locations;
+    } catch (e) {
+      print('Error getting liked locations: $e');
+      return [];
+    }
+  }
+
+  // Save a location with improved error handling
   Future<void> saveLocation(String locationId) async {
     try {
       // Check if user is logged in
-      final user = _auth.currentUser;
+      final user = _supabase.auth.currentUser;
       if (user == null) {
         throw Exception('User not logged in');
       }
 
-      // Save location
-      await _savedLocationsRef.add({
-        'userId': user.uid,
-        'locationId': locationId,
-        'savedAt': FieldValue.serverTimestamp(),
-      });
+      // Check if already saved to avoid duplicate records
+      final isSaved = await isLocationSaved(locationId);
+      if (isSaved) {
+        print('Location already saved, skipping');
+        return; // Already saved, no need to do anything
+      }
+
+      // Start a transaction by wrapping operations
+      try {
+        // Save location
+        await _supabase.from('saved_locations').insert({
+          'user_id': user.id,
+          'location_id': locationId,
+          'saved_at': DateTime.now().toIso8601String(),
+        });
+
+        // Update location's saves count
+        await _supabase.rpc(
+          'increment_saves_count',
+          params: {'location_id_param': locationId},
+        );
+
+        print('Location saved successfully');
+      } catch (e) {
+        print('Transaction error: $e');
+        // If there was an error with the RPC function but the record was inserted,
+        // we should try to clean up by removing the saved record
+        try {
+          await _supabase
+              .from('saved_locations')
+              .delete()
+              .eq('user_id', user.id)
+              .eq('location_id', locationId);
+        } catch (cleanupError) {
+          print('Error cleaning up after failed save: $cleanupError');
+        }
+        rethrow;
+      }
     } catch (e) {
       print('Error saving location: $e');
       rethrow;
     }
   }
 
-  // Unsave a location
+  // Unsave a location with improved error handling
   Future<void> unsaveLocation(String locationId) async {
     try {
       // Check if user is logged in
-      final user = _auth.currentUser;
+      final user = _supabase.auth.currentUser;
       if (user == null) {
         throw Exception('User not logged in');
       }
 
-      // Get saved location document
-      final QuerySnapshot snapshot =
-          await _savedLocationsRef
-              .where('userId', isEqualTo: user.uid)
-              .where('locationId', isEqualTo: locationId)
-              .get();
+      // Check if actually saved
+      final isSaved = await isLocationSaved(locationId);
+      if (!isSaved) {
+        print('Location not saved, nothing to unsave');
+        return; // Not saved, nothing to do
+      }
 
-      // Delete document
-      for (final doc in snapshot.docs) {
-        await doc.reference.delete();
+      // First get current saves count to make sure we don't go below 0
+      final response =
+          await _supabase
+              .from('locations')
+              .select('saves_count')
+              .eq('id', locationId)
+              .single();
+
+      final int savesCount = response['saves_count'] as int;
+
+      // Start a transaction by wrapping operations
+      try {
+        // Delete saved record
+        await _supabase
+            .from('saved_locations')
+            .delete()
+            .eq('user_id', user.id)
+            .eq('location_id', locationId);
+
+        // Only decrement if count is greater than 0
+        if (savesCount > 0) {
+          // Update location's saves count
+          await _supabase.rpc(
+            'decrement_saves_count',
+            params: {'location_id_param': locationId},
+          );
+        } else {
+          // If count is already 0 or negative, reset it to 0
+          await _supabase
+              .from('locations')
+              .update({'saves_count': 0})
+              .eq('id', locationId);
+        }
+
+        print('Location unsaved successfully');
+      } catch (e) {
+        print('Transaction error: $e');
+        rethrow;
       }
     } catch (e) {
       print('Error unsaving location: $e');
@@ -327,66 +564,134 @@ class LocationService {
   Future<bool> isLocationSaved(String locationId) async {
     try {
       // Check if user is logged in
-      final user = _auth.currentUser;
+      final user = _supabase.auth.currentUser;
       if (user == null) {
         return false;
       }
 
       // Check if location is saved
-      final QuerySnapshot snapshot =
-          await _savedLocationsRef
-              .where('userId', isEqualTo: user.uid)
-              .where('locationId', isEqualTo: locationId)
-              .limit(1)
-              .get();
+      final response =
+          await _supabase
+              .from('saved_locations')
+              .select('id')
+              .eq('user_id', user.id)
+              .eq('location_id', locationId)
+              .maybeSingle();
 
-      return snapshot.docs.isNotEmpty;
+      return response != null;
     } catch (e) {
       print('Error checking if location is saved: $e');
       return false;
     }
   }
 
-  // Like a location
+  // Like a location with improved error handling
   Future<void> likeLocation(String locationId) async {
     try {
       // Check if user is logged in
-      final user = _auth.currentUser;
+      final user = _supabase.auth.currentUser;
       if (user == null) {
         throw Exception('User not logged in');
       }
 
-      // Like location
-      await _likedLocationsRef.add({
-        'userId': user.uid,
-        'locationId': locationId,
-        'likedAt': FieldValue.serverTimestamp(),
-      });
+      // Check if already liked to avoid duplicate records
+      final isLiked = await isLocationLiked(locationId);
+      if (isLiked) {
+        print('Location already liked, skipping');
+        return; // Already liked, no need to do anything
+      }
+
+      // Start a transaction by wrapping operations
+      try {
+        // Like location
+        await _supabase.from('liked_locations').insert({
+          'user_id': user.id,
+          'location_id': locationId,
+          'liked_at': DateTime.now().toIso8601String(),
+        });
+
+        // Update location's likes count
+        await _supabase.rpc(
+          'increment_likes_count',
+          params: {'location_id_param': locationId},
+        );
+
+        print('Location liked successfully');
+      } catch (e) {
+        print('Transaction error: $e');
+        // If there was an error with the RPC function but the record was inserted,
+        // we should try to clean up by removing the liked record
+        try {
+          await _supabase
+              .from('liked_locations')
+              .delete()
+              .eq('user_id', user.id)
+              .eq('location_id', locationId);
+        } catch (cleanupError) {
+          print('Error cleaning up after failed like: $cleanupError');
+        }
+        rethrow;
+      }
     } catch (e) {
       print('Error liking location: $e');
       rethrow;
     }
   }
 
-  // Unlike a location
+  // Unlike a location with improved error handling
   Future<void> unlikeLocation(String locationId) async {
     try {
       // Check if user is logged in
-      final user = _auth.currentUser;
+      final user = _supabase.auth.currentUser;
       if (user == null) {
         throw Exception('User not logged in');
       }
 
-      // Get liked location document
-      final QuerySnapshot snapshot =
-          await _likedLocationsRef
-              .where('userId', isEqualTo: user.uid)
-              .where('locationId', isEqualTo: locationId)
-              .get();
+      // Check if actually liked
+      final isLiked = await isLocationLiked(locationId);
+      if (!isLiked) {
+        print('Location not liked, nothing to unlike');
+        return; // Not liked, nothing to do
+      }
 
-      // Delete document
-      for (final doc in snapshot.docs) {
-        await doc.reference.delete();
+      // First get current likes count to make sure we don't go below 0
+      final response =
+          await _supabase
+              .from('locations')
+              .select('likes_count')
+              .eq('id', locationId)
+              .single();
+
+      final int likesCount = response['likes_count'] as int;
+
+      // Start a transaction by wrapping operations
+      try {
+        // Delete liked record
+        await _supabase
+            .from('liked_locations')
+            .delete()
+            .eq('user_id', user.id)
+            .eq('location_id', locationId);
+
+        // Only decrement if count is greater than 0
+        if (likesCount > 0) {
+          // Update location's likes count
+          await _supabase.rpc(
+            'decrement_likes_count',
+            params: {'location_id_param': locationId},
+          );
+        } else {
+          // If count is already 0 or negative, reset it to 0
+          await _supabase
+              .from('locations')
+              .update({'likes_count': 0})
+              .eq('id', locationId);
+        }
+
+        print('Location unliked successfully');
+      } catch (e) {
+        print('Transaction error: $e');
+        rethrow;
       }
     } catch (e) {
       print('Error unliking location: $e');
@@ -398,22 +703,70 @@ class LocationService {
   Future<bool> isLocationLiked(String locationId) async {
     try {
       // Check if user is logged in
-      final user = _auth.currentUser;
+      final user = _supabase.auth.currentUser;
       if (user == null) {
         return false;
       }
 
       // Check if location is liked
-      final QuerySnapshot snapshot =
-          await _likedLocationsRef
-              .where('userId', isEqualTo: user.uid)
-              .where('locationId', isEqualTo: locationId)
-              .limit(1)
-              .get();
+      final response =
+          await _supabase
+              .from('liked_locations')
+              .select('id')
+              .eq('user_id', user.id)
+              .eq('location_id', locationId)
+              .maybeSingle();
 
-      return snapshot.docs.isNotEmpty;
+      return response != null;
     } catch (e) {
       print('Error checking if location is liked: $e');
+      return false;
+    }
+  }
+
+  // Delete a location
+  Future<bool> deleteLocation(String locationId) async {
+    try {
+      // Check if user is logged in
+      final user = _supabase.auth.currentUser;
+      if (user == null) {
+        throw Exception('User not logged in');
+      }
+
+      // Check if the user is the creator of the location
+      final response =
+          await _supabase
+              .from('locations')
+              .select('creator_id')
+              .eq('id', locationId)
+              .single();
+
+      if (response['creator_id'] != user.id) {
+        throw Exception('You can only delete your own locations');
+      }
+
+      // Get user's post count
+      final userResponse =
+          await _supabase
+              .from('users')
+              .select('posts_count')
+              .eq('id', user.id)
+              .single();
+
+      final postsCount = userResponse['posts_count'] as int;
+
+      // Delete location
+      await _supabase.from('locations').delete().eq('id', locationId);
+
+      // Update user's post count, ensuring it doesn't go below 0
+      await _supabase
+          .from('users')
+          .update({'posts_count': postsCount > 0 ? postsCount - 1 : 0})
+          .eq('id', user.id);
+
+      return true;
+    } catch (e) {
+      print('Error deleting location: $e');
       return false;
     }
   }

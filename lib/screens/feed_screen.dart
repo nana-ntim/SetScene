@@ -1,3 +1,5 @@
+// File location: lib/screens/feed_screen.dart
+
 import 'package:flutter/material.dart';
 import 'package:setscene/models/location_model.dart';
 import 'package:setscene/widgets/location_card.dart';
@@ -25,6 +27,7 @@ class _FeedScreenState extends State<FeedScreen>
   final double _opacity = 1.0;
   Offset _dragPosition = Offset.zero;
   bool _isDragging = false;
+  bool _showSwipeHelp = true;
 
   @override
   void initState() {
@@ -61,15 +64,6 @@ class _FeedScreenState extends State<FeedScreen>
     });
 
     try {
-      // Simulate and handle empty state for testing
-      // Remove the mock data and use real data from your service
-      await Future.delayed(
-        const Duration(seconds: 1),
-      ); // Simulate network delay
-
-      // TESTING: Uncomment to test empty state
-      // final locations = <LocationModel>[];
-
       // REAL IMPLEMENTATION:
       final locations = await _locationService.getLocations();
 
@@ -103,6 +97,7 @@ class _FeedScreenState extends State<FeedScreen>
         _currentIndex++;
         _animationController.reset();
         _animationController.forward();
+        _showSwipeHelp = false;
       });
     }
   }
@@ -117,6 +112,7 @@ class _FeedScreenState extends State<FeedScreen>
         _currentIndex++;
         _animationController.reset();
         _animationController.forward();
+        _showSwipeHelp = false;
       });
     }
   }
@@ -131,6 +127,7 @@ class _FeedScreenState extends State<FeedScreen>
   void _onDragUpdate(DragUpdateDetails details) {
     setState(() {
       _dragPosition += details.delta;
+      _showSwipeHelp = false;
     });
   }
 
@@ -157,13 +154,43 @@ class _FeedScreenState extends State<FeedScreen>
       appBar: AppBar(
         backgroundColor: Colors.black,
         elevation: 0,
-        title: const Text(
-          'FilmSpots',
-          style: TextStyle(
-            color: Colors.white,
-            fontSize: 24,
-            fontWeight: FontWeight.bold,
-          ),
+        title: Row(
+          children: [
+            const Icon(Icons.location_on, color: Colors.white, size: 24),
+            const SizedBox(width: 8),
+            const Text(
+              'FilmSpots',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 22,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const Spacer(),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: Colors.blue.withOpacity(0.2),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: Colors.blue.withOpacity(0.5)),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.trending_up, color: Colors.blue[400], size: 14),
+                  const SizedBox(width: 4),
+                  Text(
+                    'Trending',
+                    style: TextStyle(
+                      color: Colors.blue[400],
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
         actions: [
           IconButton(
@@ -172,7 +199,6 @@ class _FeedScreenState extends State<FeedScreen>
               // Show filter options
             },
           ),
-          // Add refresh button
           IconButton(
             icon: const Icon(Icons.refresh, color: Colors.white),
             onPressed: _loadLocations,
@@ -190,165 +216,195 @@ class _FeedScreenState extends State<FeedScreen>
               ? _buildErrorState()
               : _locations.isEmpty
               ? _buildEmptyState()
-              : Column(
-                children: [
-                  Expanded(
-                    child:
-                        _currentIndex < _locations.length
-                            ? GestureDetector(
-                              onHorizontalDragStart: _onDragStart,
-                              onHorizontalDragUpdate: _onDragUpdate,
-                              onHorizontalDragEnd: _onDragEnd,
-                              child: Stack(
-                                alignment: Alignment.center,
-                                children: [
-                                  // Next card (shown behind current)
-                                  if (_currentIndex < _locations.length - 1)
-                                    Positioned(
-                                      top: 40,
-                                      left: 20,
-                                      right: 20,
-                                      bottom: 90,
-                                      child: Transform.scale(
-                                        scale: 0.95,
-                                        child: LocationCard(
-                                          location:
-                                              _locations[_currentIndex + 1],
-                                          isActive: false,
-                                        ),
-                                      ),
-                                    ),
-
-                                  // Current card
-                                  Positioned(
-                                    top: 20,
-                                    left: 20,
-                                    right: 20,
-                                    bottom: 90,
-                                    child: AnimatedBuilder(
-                                      animation: _animationController,
-                                      builder: (context, child) {
-                                        return Transform.translate(
-                                          offset:
-                                              _isDragging
-                                                  ? _dragPosition
-                                                  : Offset.zero,
-                                          child: Transform.rotate(
-                                            angle:
-                                                _isDragging
-                                                    ? _dragPosition.dx / 1000
-                                                    : _rotationAngle,
-                                            child: Opacity(
-                                              opacity:
-                                                  _isDragging
-                                                      ? 1.0 -
-                                                          (_dragPosition.dx
-                                                                      .abs() /
-                                                                  1000)
-                                                              .clamp(0.0, 0.2)
-                                                      : _opacity,
-                                              child: Transform.scale(
-                                                scale: _scaleAnimation.value,
-                                                child: child,
-                                              ),
-                                            ),
-                                          ),
-                                        );
-                                      },
-                                      child: LocationCard(
-                                        location: _locations[_currentIndex],
-                                        isActive: true,
-                                      ),
-                                    ),
-                                  ),
-
-                                  // Action buttons
-                                  Positioned(
-                                    bottom: 20,
-                                    left: 0,
-                                    right: 0,
-                                    child: Row(
-                                      mainAxisAlignment:
-                                          MainAxisAlignment.center,
-                                      children: [
-                                        _buildActionButton(
-                                          icon: Icons.close,
-                                          color: Colors.red,
-                                          onTap: _onSwipeLeft,
-                                        ),
-                                        const SizedBox(width: 20),
-                                        _buildActionButton(
-                                          icon: Icons.bookmark_border,
-                                          color: Colors.amber,
-                                          onTap: () {
-                                            // Save current location
-                                            _locationService.saveLocation(
-                                              _locations[_currentIndex].id,
-                                            );
-                                            ScaffoldMessenger.of(
-                                              context,
-                                            ).showSnackBar(
-                                              SnackBar(
-                                                content: const Text(
-                                                  'Location saved',
-                                                ),
-                                                behavior:
-                                                    SnackBarBehavior.floating,
-                                                shape: RoundedRectangleBorder(
-                                                  borderRadius:
-                                                      BorderRadius.circular(10),
-                                                ),
-                                                backgroundColor:
-                                                    Colors.green[700],
-                                                duration: const Duration(
-                                                  seconds: 1,
-                                                ),
-                                              ),
-                                            );
-                                          },
-                                        ),
-                                        const SizedBox(width: 20),
-                                        _buildActionButton(
-                                          icon: Icons.favorite_border,
-                                          color: Colors.green,
-                                          onTap: _onSwipeRight,
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            )
-                            : _buildEndOfLocationsState(),
-                  ),
-                ],
-              ),
+              : _buildFeedContent(),
     );
   }
 
-  Widget _buildActionButton({
-    required IconData icon,
-    required Color color,
-    required VoidCallback onTap,
-  }) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: 60,
-        height: 60,
-        decoration: BoxDecoration(
-          color: Colors.grey[900],
-          shape: BoxShape.circle,
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.2),
-              blurRadius: 10,
-              offset: const Offset(0, 5),
+  Widget _buildFeedContent() {
+    return Stack(
+      children: [
+        // Main card content
+        Column(
+          children: [
+            Expanded(
+              child:
+                  _currentIndex < _locations.length
+                      ? GestureDetector(
+                        onHorizontalDragStart: _onDragStart,
+                        onHorizontalDragUpdate: _onDragUpdate,
+                        onHorizontalDragEnd: _onDragEnd,
+                        child: Stack(
+                          alignment: Alignment.center,
+                          children: [
+                            // Next card (shown behind current)
+                            if (_currentIndex < _locations.length - 1)
+                              Positioned(
+                                top: 40,
+                                left: 20,
+                                right: 20,
+                                bottom: 90,
+                                child: Transform.scale(
+                                  scale: 0.95,
+                                  child: LocationCard(
+                                    location: _locations[_currentIndex + 1],
+                                    isActive: false,
+                                  ),
+                                ),
+                              ),
+
+                            // Current card
+                            Positioned(
+                              top: 20,
+                              left: 20,
+                              right: 20,
+                              bottom: 90,
+                              child: AnimatedBuilder(
+                                animation: _animationController,
+                                builder: (context, child) {
+                                  return Transform.translate(
+                                    offset:
+                                        _isDragging
+                                            ? _dragPosition
+                                            : Offset.zero,
+                                    child: Transform.rotate(
+                                      angle:
+                                          _isDragging
+                                              ? _dragPosition.dx / 1000
+                                              : _rotationAngle,
+                                      child: Opacity(
+                                        opacity:
+                                            _isDragging
+                                                ? 1.0 -
+                                                    (_dragPosition.dx.abs() /
+                                                            1000)
+                                                        .clamp(0.0, 0.2)
+                                                : _opacity,
+                                        child: Transform.scale(
+                                          scale: _scaleAnimation.value,
+                                          child: child,
+                                        ),
+                                      ),
+                                    ),
+                                  );
+                                },
+                                child: LocationCard(
+                                  location: _locations[_currentIndex],
+                                  isActive: true,
+                                ),
+                              ),
+                            ),
+
+                            // Swipe left indicator
+                            if (_isDragging && _dragPosition.dx < -20)
+                              Positioned(
+                                left: 40,
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 16,
+                                    vertical: 8,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: Colors.red,
+                                    borderRadius: BorderRadius.circular(20),
+                                  ),
+                                  child: const Row(
+                                    children: [
+                                      Icon(Icons.close, color: Colors.white),
+                                      SizedBox(width: 8),
+                                      Text(
+                                        'SKIP',
+                                        style: TextStyle(
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+
+                            // Swipe right indicator
+                            if (_isDragging && _dragPosition.dx > 20)
+                              Positioned(
+                                right: 40,
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 16,
+                                    vertical: 8,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: Colors.green,
+                                    borderRadius: BorderRadius.circular(20),
+                                  ),
+                                  child: const Row(
+                                    children: [
+                                      Icon(Icons.favorite, color: Colors.white),
+                                      SizedBox(width: 8),
+                                      Text(
+                                        'LIKE',
+                                        style: TextStyle(
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                      )
+                      : _buildEndOfLocationsState(),
             ),
           ],
         ),
-        child: Icon(icon, color: color, size: 30),
-      ),
+
+        // Swipe help tooltip - shown only initially
+        if (_showSwipeHelp && _locations.isNotEmpty && !_isLoading)
+          Positioned(
+            bottom: 120,
+            left: 0,
+            right: 0,
+            child: Center(
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 12,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(0.8),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.white.withOpacity(0.2)),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.3),
+                      blurRadius: 10,
+                      spreadRadius: 2,
+                    ),
+                  ],
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text(
+                      'Swipe left to skip, right to like',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 5),
+                    const Text(
+                      'Tap card to view details',
+                      style: TextStyle(color: Colors.white70, fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+      ],
     );
   }
 
@@ -364,6 +420,13 @@ class _FeedScreenState extends State<FeedScreen>
               decoration: BoxDecoration(
                 color: Colors.grey[900]!.withOpacity(0.5),
                 shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.blue.withOpacity(0.1),
+                    blurRadius: 20,
+                    spreadRadius: 5,
+                  ),
+                ],
               ),
               child: Icon(
                 Icons.location_off,
@@ -422,7 +485,18 @@ class _FeedScreenState extends State<FeedScreen>
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.error_outline, size: 64, color: Colors.red[400]),
+            Container(
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                color: Colors.red.withOpacity(0.1),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                Icons.error_outline,
+                size: 64,
+                color: Colors.red[400],
+              ),
+            ),
             const SizedBox(height: 24),
             Text(
               'Something went wrong',
@@ -465,7 +539,25 @@ class _FeedScreenState extends State<FeedScreen>
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(Icons.check_circle_outline, size: 64, color: Colors.grey[700]),
+          Container(
+            padding: const EdgeInsets.all(24),
+            decoration: BoxDecoration(
+              color: Colors.grey[900]!.withOpacity(0.5),
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.green.withOpacity(0.1),
+                  blurRadius: 20,
+                  spreadRadius: 5,
+                ),
+              ],
+            ),
+            child: Icon(
+              Icons.check_circle_outline,
+              size: 64,
+              color: Colors.grey[700],
+            ),
+          ),
           const SizedBox(height: 16),
           Text(
             'You\'ve seen all locations',
@@ -480,6 +572,7 @@ class _FeedScreenState extends State<FeedScreen>
             onPressed: () {
               setState(() {
                 _currentIndex = 0;
+                _showSwipeHelp = true;
                 _animationController.reset();
                 _animationController.forward();
               });

@@ -1,4 +1,5 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
+// File location: lib/models/location_model.dart
+
 import 'package:intl/intl.dart';
 
 class LocationModel {
@@ -15,10 +16,15 @@ class LocationModel {
   final List<String> categories;
   final String creatorId;
   final String creatorName;
+  final String creatorUsername;
   final String? creatorPhotoUrl;
   final DateTime createdAt;
-  final DateTime savedAt;
+  final DateTime? savedAt;
+  final DateTime? likedAt;
+  final int likesCount;
+  final int savesCount;
   bool isLiked;
+  bool isSaved;
   double? distance;
 
   LocationModel({
@@ -35,17 +41,24 @@ class LocationModel {
     required this.categories,
     required this.creatorId,
     required this.creatorName,
+    required this.creatorUsername,
     this.creatorPhotoUrl,
     required this.createdAt,
-    required this.savedAt,
+    this.savedAt,
+    this.likedAt,
+    this.likesCount = 0,
+    this.savesCount = 0,
     this.isLiked = false,
+    this.isSaved = false,
     this.distance,
   });
 
   // Format the saved date to a readable string
   String get savedAtFormatted {
+    if (savedAt == null) return '';
+
     final now = DateTime.now();
-    final difference = now.difference(savedAt);
+    final difference = now.difference(savedAt!);
 
     if (difference.inDays < 1) {
       if (difference.inHours < 1) {
@@ -55,41 +68,71 @@ class LocationModel {
     } else if (difference.inDays < 7) {
       return '${difference.inDays}d ago';
     } else {
-      return DateFormat('MMM d').format(savedAt);
+      return DateFormat('MMM d').format(savedAt!);
     }
   }
 
   // Format the created date to a readable string
-  String get createdAt45 {
+  String get createdAtFormatted {
     return DateFormat('MMM d, yyyy').format(createdAt);
   }
 
-  // Factory constructor from Firestore
-  factory LocationModel.fromFirestore(DocumentSnapshot doc) {
-    final data = doc.data() as Map<String, dynamic>;
+  // Format the time ago string
+  String get timeAgo {
+    final now = DateTime.now();
+    final difference = now.difference(createdAt);
 
+    if (difference.inDays < 1) {
+      if (difference.inHours < 1) {
+        if (difference.inMinutes < 1) {
+          return 'Just now';
+        }
+        return '${difference.inMinutes}m ago';
+      }
+      return '${difference.inHours}h ago';
+    } else if (difference.inDays < 7) {
+      return '${difference.inDays}d ago';
+    } else if (difference.inDays < 30) {
+      return '${(difference.inDays / 7).floor()}w ago';
+    } else if (difference.inDays < 365) {
+      return '${(difference.inDays / 30).floor()}mo ago';
+    } else {
+      return '${(difference.inDays / 365).floor()}y ago';
+    }
+  }
+
+  // Factory constructor from Supabase
+  factory LocationModel.fromMap(Map<String, dynamic> map) {
     return LocationModel(
-      id: doc.id,
-      name: data['name'] ?? '',
-      description: data['description'] ?? '',
-      address: data['address'] ?? '',
-      latitude: (data['latitude'] ?? 0.0).toDouble(),
-      longitude: (data['longitude'] ?? 0.0).toDouble(),
-      imageUrls: List<String>.from(data['imageUrls'] ?? []),
-      audioUrl: data['audioUrl'],
-      visualRating: (data['visualRating'] ?? 0.0).toDouble(),
-      audioRating: (data['audioRating'] ?? 0.0).toDouble(),
-      categories: List<String>.from(data['categories'] ?? []),
-      creatorId: data['creatorId'] ?? '',
-      creatorName: data['creatorName'] ?? '',
-      creatorPhotoUrl: data['creatorPhotoUrl'],
-      createdAt: (data['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
-      savedAt: (data['savedAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
-      isLiked: data['isLiked'] ?? false,
+      id: map['id'] ?? '',
+      name: map['name'] ?? '',
+      description: map['description'] ?? '',
+      address: map['address'] ?? '',
+      latitude: (map['latitude'] ?? 0.0).toDouble(),
+      longitude: (map['longitude'] ?? 0.0).toDouble(),
+      imageUrls: List<String>.from(map['image_urls'] ?? []),
+      audioUrl: map['audio_url'],
+      visualRating: (map['visual_rating'] ?? 0.0).toDouble(),
+      audioRating: (map['audio_rating'] ?? 0.0).toDouble(),
+      categories: List<String>.from(map['categories'] ?? []),
+      creatorId: map['creator_id'] ?? '',
+      creatorName: map['creator_name'] ?? '',
+      creatorUsername: map['creator_username'] ?? '',
+      creatorPhotoUrl: map['creator_photo_url'],
+      createdAt:
+          map['created_at'] != null
+              ? DateTime.parse(map['created_at'])
+              : DateTime.now(),
+      savedAt: map['saved_at'] != null ? DateTime.parse(map['saved_at']) : null,
+      likedAt: map['liked_at'] != null ? DateTime.parse(map['liked_at']) : null,
+      likesCount: (map['likes_count'] ?? 0),
+      savesCount: (map['saves_count'] ?? 0),
+      isLiked: map['is_liked'] ?? false,
+      isSaved: map['is_saved'] ?? false,
     );
   }
 
-  // Convert to Map for Firestore
+  // Convert to Map for Supabase
   Map<String, dynamic> toMap() {
     return {
       'name': name,
@@ -97,17 +140,17 @@ class LocationModel {
       'address': address,
       'latitude': latitude,
       'longitude': longitude,
-      'imageUrls': imageUrls,
-      'audioUrl': audioUrl,
-      'visualRating': visualRating,
-      'audioRating': audioRating,
+      'image_urls': imageUrls,
+      'audio_url': audioUrl,
+      'visual_rating': visualRating,
+      'audio_rating': audioRating,
       'categories': categories,
-      'creatorId': creatorId,
-      'creatorName': creatorName,
-      'creatorPhotoUrl': creatorPhotoUrl,
-      'createdAt': Timestamp.fromDate(createdAt),
-      'savedAt': Timestamp.fromDate(savedAt),
-      'isLiked': isLiked,
+      'creator_id': creatorId,
+      'creator_name': creatorName,
+      'creator_username': creatorUsername,
+      'creator_photo_url': creatorPhotoUrl,
+      'likes_count': likesCount,
+      'saves_count': savesCount,
     };
   }
 
@@ -126,10 +169,15 @@ class LocationModel {
     List<String>? categories,
     String? creatorId,
     String? creatorName,
+    String? creatorUsername,
     String? creatorPhotoUrl,
     DateTime? createdAt,
     DateTime? savedAt,
+    DateTime? likedAt,
+    int? likesCount,
+    int? savesCount,
     bool? isLiked,
+    bool? isSaved,
     double? distance,
   }) {
     return LocationModel(
@@ -146,10 +194,15 @@ class LocationModel {
       categories: categories ?? this.categories,
       creatorId: creatorId ?? this.creatorId,
       creatorName: creatorName ?? this.creatorName,
+      creatorUsername: creatorUsername ?? this.creatorUsername,
       creatorPhotoUrl: creatorPhotoUrl ?? this.creatorPhotoUrl,
       createdAt: createdAt ?? this.createdAt,
       savedAt: savedAt ?? this.savedAt,
+      likedAt: likedAt ?? this.likedAt,
+      likesCount: likesCount ?? this.likesCount,
+      savesCount: savesCount ?? this.savesCount,
       isLiked: isLiked ?? this.isLiked,
+      isSaved: isSaved ?? this.isSaved,
       distance: distance ?? this.distance,
     );
   }

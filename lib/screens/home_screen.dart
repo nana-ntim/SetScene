@@ -1,3 +1,5 @@
+// File: lib/screens/home_screen.dart
+
 import 'package:flutter/material.dart';
 import 'package:setscene/screens/feed_screen.dart';
 import 'package:setscene/screens/create_screen.dart';
@@ -5,6 +7,7 @@ import 'package:setscene/screens/map_screen.dart';
 import 'package:setscene/screens/saved_screen.dart';
 import 'package:setscene/screens/profile_screen.dart';
 import 'package:setscene/services/auth_service.dart';
+import 'package:setscene/components/custom_bottom_nav_bar.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -16,47 +19,31 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen>
     with SingleTickerProviderStateMixin {
   int _currentIndex = 0;
-  final PageController _pageController = PageController();
+  final AuthService _authService = AuthService();
+  late PageController _pageController;
+  late AnimationController _animationController;
 
   // List of screen widgets
   late final List<Widget> _screens;
-
-  // Tabs data with icons
-  final List<Map<String, dynamic>> _tabs = [
-    {
-      'icon': Icons.explore_outlined,
-      'activeIcon': Icons.explore,
-      'label': 'Explore',
-    },
-    {'icon': Icons.map_outlined, 'activeIcon': Icons.map, 'label': 'Map'},
-    {
-      'icon': Icons.add_circle_outline,
-      'activeIcon': Icons.add_circle,
-      'label': 'Create',
-    },
-    {
-      'icon': Icons.bookmark_border,
-      'activeIcon': Icons.bookmark,
-      'label': 'Saved',
-    },
-    {
-      'icon': Icons.person_outline,
-      'activeIcon': Icons.person,
-      'label': 'Profile',
-    },
-  ];
-
-  final AuthService _authService = AuthService();
 
   @override
   void initState() {
     super.initState();
 
+    // Initialize page controller
+    _pageController = PageController();
+
+    // Initialize animation controller
+    _animationController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 300),
+    );
+
     // Initialize screens
     _screens = [
       const FeedScreen(),
       const MapScreen(),
-      const CreateScreen(),
+      Container(), // Empty container for create (modal instead)
       const SavedScreen(),
       const ProfileScreen(),
     ];
@@ -65,6 +52,7 @@ class _HomeScreenState extends State<HomeScreen>
   @override
   void dispose() {
     _pageController.dispose();
+    _animationController.dispose();
     super.dispose();
   }
 
@@ -78,24 +66,12 @@ class _HomeScreenState extends State<HomeScreen>
 
     setState(() {
       _currentIndex = index;
+      _pageController.jumpToPage(index);
     });
 
-    // Animate to the selected page
-    _pageController.animateToPage(
-      index,
-      duration: const Duration(milliseconds: 300),
-      curve: Curves.easeInOut,
-    );
-  }
-
-  // Handle page change from swipe
-  void _onPageChanged(int index) {
-    if (index != 2) {
-      // Skip center Create button from swipe
-      setState(() {
-        _currentIndex = index;
-      });
-    }
+    // Play animation for feedback
+    _animationController.reset();
+    _animationController.forward();
   }
 
   // Show create options modal
@@ -110,8 +86,8 @@ class _HomeScreenState extends State<HomeScreen>
             decoration: BoxDecoration(
               color: Colors.grey[900],
               borderRadius: const BorderRadius.only(
-                topLeft: Radius.circular(24),
-                topRight: Radius.circular(24),
+                topLeft: Radius.circular(30),
+                topRight: Radius.circular(30),
               ),
             ),
             child: Column(
@@ -138,48 +114,34 @@ class _HomeScreenState extends State<HomeScreen>
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
-      body: PageView(
-        controller: _pageController,
-        onPageChanged: _onPageChanged,
-        physics:
-            const NeverScrollableScrollPhysics(), // Disable swipe to improve performance
-        children: [
-          _screens[0], // Feed
-          _screens[1], // Map
-          Container(), // Empty container for create (modal instead)
-          _screens[3], // Saved
-          _screens[4], // Profile
-        ],
-      ),
-      bottomNavigationBar: Container(
-        decoration: BoxDecoration(
-          border: Border(top: BorderSide(color: Colors.grey[900]!, width: 0.5)),
+      // Wrap the body in a SafeArea to prevent overflows
+      body: SafeArea(
+        // Only apply safe area to the top and sides, not the bottom
+        top: true,
+        bottom: false,
+        child: PageView(
+          controller: _pageController,
+          physics:
+              const NeverScrollableScrollPhysics(), // Disable swiping between pages
+          children: _screens,
+          onPageChanged: (index) {
+            if (index != 2) {
+              // Skip the create page in page view
+              setState(() {
+                _currentIndex = index;
+              });
+            }
+          },
         ),
-        child: BottomNavigationBar(
+      ),
+      // This is crucial for proper layout with the custom bottom nav bar
+      extendBody: true,
+      bottomNavigationBar: Padding(
+        // Add padding only at the bottom to ensure nav bar is visible
+        padding: const EdgeInsets.only(bottom: 16),
+        child: CustomBottomNavBar(
           currentIndex: _currentIndex,
           onTap: _onTabTapped,
-          backgroundColor: Colors.black,
-          type: BottomNavigationBarType.fixed,
-          showSelectedLabels: false,
-          showUnselectedLabels: false,
-          selectedItemColor: Colors.blue[400],
-          unselectedItemColor: Colors.grey[700],
-          elevation: 0,
-          items:
-              _tabs.map((tab) {
-                // Special styling for center item
-                final bool isCreateButton = tab['label'] == 'Create';
-
-                return BottomNavigationBarItem(
-                  icon: Icon(
-                    _currentIndex == _tabs.indexOf(tab)
-                        ? tab['activeIcon']
-                        : tab['icon'],
-                    size: isCreateButton ? 32 : 26,
-                  ),
-                  label: tab['label'],
-                );
-              }).toList(),
         ),
       ),
     );

@@ -8,7 +8,7 @@ import 'package:setscene/screens/create/photo_step.dart';
 import 'package:setscene/screens/create/details_step.dart';
 import 'package:setscene/screens/create/sound_step.dart';
 import 'package:setscene/screens/create/categories_step.dart';
-import 'package:setscene/services/cloudinary_service.dart';
+import 'package:setscene/services/storage_service.dart';
 
 class CreateScreen extends StatefulWidget {
   final VoidCallback? onClose;
@@ -21,6 +21,7 @@ class CreateScreen extends StatefulWidget {
 
 class _CreateScreenState extends State<CreateScreen> {
   final LocationService _locationService = LocationService();
+  final StorageService _storageService = StorageService();
   final _formKey = GlobalKey<FormState>();
 
   // Shared controllers across steps
@@ -40,162 +41,115 @@ class _CreateScreenState extends State<CreateScreen> {
   // Form progress
   int _currentStep = 0;
   bool _isSubmitting = false;
-  bool _isTestingUpload = false;
+  bool _isMounted = true; // Track mounted state
+  String? _errorMessage;
 
   @override
   void dispose() {
+    _isMounted = false; // Mark as unmounted first
     _nameController.dispose();
     _descriptionController.dispose();
     _addressController.dispose();
     super.dispose();
   }
 
-  // Test Cloudinary upload directly
-  Future<void> _testDirectUpload() async {
+  // Submit form with improved error handling
+  Future<void> _submitForm() async {
+    if (!_formKey.currentState!.validate()) return;
+
+    if (_images.isEmpty) {
+      _showErrorSnackBar('Please add at least one image');
+      return;
+    }
+
+    if (_latitude == null || _longitude == null) {
+      _showErrorSnackBar('Location is required');
+      return;
+    }
+
+    if (!_isMounted) return;
+
     setState(() {
-      _isTestingUpload = true;
+      _isSubmitting = true;
+      _errorMessage = null;
     });
 
-    print("DEBUG: Testing direct Cloudinary upload");
     try {
-      final testImage = await ImagePicker().pickImage(
-        source: ImageSource.gallery,
-        maxWidth: 800,
-        maxHeight: 600,
-        imageQuality: 70,
+      print('Submitting form with data:');
+      print('Name: ${_nameController.text}');
+      print('Description: ${_descriptionController.text}');
+      print('Address: ${_addressController.text}');
+      print('Latitude: $_latitude, Longitude: $_longitude');
+      print('Images count: ${_images.length}');
+      print('Audio file: ${_audioFile?.path}');
+      print('Visual rating: $_visualRating');
+      print('Audio rating: $_audioRating');
+      print('Categories: $_selectedCategories');
+
+      // Use a temporary list to avoid modifying the original
+      final imagesToUpload = List<File>.from(_images);
+
+      final locationId = await _locationService.createLocation(
+        name: _nameController.text,
+        description: _descriptionController.text,
+        address: _addressController.text,
+        latitude: _latitude!,
+        longitude: _longitude!,
+        images: imagesToUpload,
+        audioFile: _audioFile,
+        visualRating: _visualRating,
+        audioRating: _audioRating,
+        categories: _selectedCategories,
       );
 
-      if (testImage != null) {
-        print("Image selected: ${testImage.path}");
-        final file = File(testImage.path);
-        final fileSize = await file.length();
-        print("File size: $fileSize bytes");
+      print('Location created successfully with ID: $locationId');
 
-        final cloudinary = CloudinaryService.instance;
-        print("Cloudinary info:");
-        print("- Cloud name: ${cloudinary.cloudName}");
-        print("- Upload preset: ${cloudinary.uploadPreset}");
-
-        final url = await cloudinary.uploadFile(file, 'test_folder');
-        print("UPLOAD RESULT: ${url ?? 'NULL RESULT'}");
-
-        if (url != null) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text("Upload successful! URL: $url"),
-              backgroundColor: Colors.green,
-            ),
-          );
-        } else {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text("Upload returned null URL"),
-              backgroundColor: Colors.red,
-            ),
-          );
-        }
-      }
-    } catch (e) {
-      print("DIRECT UPLOAD ERROR: $e");
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text("Upload error: ${e.toString()}"),
-          backgroundColor: Colors.red,
-        ),
-      );
-    } finally {
-      setState(() {
-        _isTestingUpload = false;
-      });
-    }
-  }
-
-  // Submit form
-  Future<void> _submitForm() async {
-    if (_formKey.currentState!.validate()) {
-      if (_images.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Please add at least one image'),
-            backgroundColor: Colors.red,
-          ),
-        );
-        return;
-      }
-
-      if (_latitude == null || _longitude == null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Location is required'),
-            backgroundColor: Colors.red,
-          ),
-        );
-        return;
-      }
-
-      setState(() {
-        _isSubmitting = true;
-      });
-
-      try {
-        print('Submitting form with data:');
-        print('Name: ${_nameController.text}');
-        print('Description: ${_descriptionController.text}');
-        print('Address: ${_addressController.text}');
-        print('Latitude: $_latitude, Longitude: $_longitude');
-        print('Images count: ${_images.length}');
-        print('Audio file: ${_audioFile?.path}');
-        print('Visual rating: $_visualRating');
-        print('Audio rating: $_audioRating');
-        print('Categories: $_selectedCategories');
-
-        // Use a temporary list to avoid modifying the original
-        final imagesToUpload = List<File>.from(_images);
-
-        final locationId = await _locationService.createLocation(
-          name: _nameController.text,
-          description: _descriptionController.text,
-          address: _addressController.text,
-          latitude: _latitude!,
-          longitude: _longitude!,
-          images: imagesToUpload,
-          audioFile: _audioFile,
-          visualRating: _visualRating,
-          audioRating: _audioRating,
-          categories: _selectedCategories,
-        );
-
-        print('Location created successfully with ID: $locationId');
-
+      // Only show success message and close if widget is still mounted
+      if (_isMounted) {
         // Success
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Location created successfully'),
-            backgroundColor: Colors.green,
-          ),
-        );
+        _showSuccessSnackBar('Location created successfully');
 
         // Close create screen
         if (widget.onClose != null) {
           widget.onClose!();
         }
-      } catch (e) {
-        print('Error creating location: $e');
+      }
+    } catch (e) {
+      print('Error creating location: $e');
 
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error creating location: ${e.toString()}'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      } finally {
-        if (mounted) {
-          setState(() {
-            _isSubmitting = false;
-          });
-        }
+      if (_isMounted) {
+        setState(() {
+          _isSubmitting = false;
+          _errorMessage = 'Error creating location: ${e.toString()}';
+        });
+
+        _showErrorSnackBar('Error creating location: ${e.toString()}');
       }
     }
+  }
+
+  void _showErrorSnackBar(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: Colors.red,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        margin: const EdgeInsets.all(10),
+      ),
+    );
+  }
+
+  void _showSuccessSnackBar(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: Colors.green,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        margin: const EdgeInsets.all(10),
+      ),
+    );
   }
 
   @override
@@ -220,44 +174,39 @@ class _CreateScreenState extends State<CreateScreen> {
                   onPressed: widget.onClose,
                 )
                 : null,
-        actions: [
-          // Debug button in AppBar
-          IconButton(
-            icon: const Icon(Icons.bug_report, color: Colors.orange),
-            tooltip: 'Test Upload',
-            onPressed: _isTestingUpload ? null : _testDirectUpload,
-          ),
-        ],
       ),
       body: Column(
         children: [
-          // DEBUG BUTTON at the top for easy access
-          Container(
-            width: double.infinity,
-            margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: ElevatedButton(
-              onPressed: _isTestingUpload ? null : _testDirectUpload,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.orange,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 12),
+          // Error message if present
+          if (_errorMessage != null)
+            Container(
+              width: double.infinity,
+              margin: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.red.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.red.withOpacity(0.3)),
               ),
-              child:
-                  _isTestingUpload
-                      ? const SizedBox(
-                        width: 24,
-                        height: 24,
-                        child: CircularProgressIndicator(
-                          color: Colors.white,
-                          strokeWidth: 2,
-                        ),
-                      )
-                      : const Text(
-                        'TEST CLOUDINARY UPLOAD DIRECTLY',
-                        style: TextStyle(fontWeight: FontWeight.bold),
-                      ),
+              child: Row(
+                children: [
+                  const Icon(Icons.error_outline, color: Colors.red, size: 24),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      _errorMessage!,
+                      style: const TextStyle(color: Colors.red),
+                    ),
+                  ),
+                  IconButton(
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                    icon: const Icon(Icons.close, color: Colors.red, size: 20),
+                    onPressed: () => setState(() => _errorMessage = null),
+                  ),
+                ],
+              ),
             ),
-          ),
 
           // Main form
           Expanded(

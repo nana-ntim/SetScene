@@ -36,8 +36,10 @@ class _DetailsStepState extends State<DetailsStep> {
     }
   }
 
-  // Get current location
+  // Get current location - FIXED to prevent setState after dispose
   Future<void> _getCurrentLocation() async {
+    if (!mounted) return; // Check mounted state before starting
+
     setState(() {
       _isLoadingLocation = true;
     });
@@ -59,6 +61,9 @@ class _DetailsStepState extends State<DetailsStep> {
 
       final Position position = await Geolocator.getCurrentPosition();
 
+      // Check mounted again before setState
+      if (!mounted) return;
+
       widget.onLocationChanged(position.latitude, position.longitude);
 
       setState(() {
@@ -70,16 +75,22 @@ class _DetailsStepState extends State<DetailsStep> {
     } catch (e) {
       print('Error getting location: $e');
 
+      // Check mounted again before setState
+      if (!mounted) return;
+
       setState(() {
         _isLoadingLocation = false;
       });
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Error getting location: ${e.toString()}'),
-          backgroundColor: Colors.red,
-        ),
-      );
+      // Only show UI notification if still mounted
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error getting location: ${e.toString()}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 

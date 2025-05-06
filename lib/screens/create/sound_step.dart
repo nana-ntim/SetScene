@@ -29,33 +29,72 @@ class _SoundStepState extends State<SoundStep> {
   bool _isRecording = false;
   bool _isRecorderInitialized = false;
   String? _recordingPath;
+  bool _isMounted = true; // Track mounted state
 
   @override
   void initState() {
     super.initState();
-    _initRecorder();
+    // Initialize the recorder after a short delay to ensure widget is properly mounted
+    Future.delayed(Duration.zero, () {
+      if (_isMounted) {
+        _initRecorder();
+      }
+    });
   }
 
   @override
   void dispose() {
-    _soundRecorder.closeRecorder();
+    _isMounted = false; // Mark as unmounted first
+    _cleanupRecorder();
     super.dispose();
   }
 
-  // Initialize audio recorder
+  // Safely cleanup recorder resources
+  Future<void> _cleanupRecorder() async {
+    try {
+      if (_isRecorderInitialized) {
+        if (_isRecording) {
+          await _soundRecorder.stopRecorder();
+          _isRecording = false;
+        }
+        await _soundRecorder.closeRecorder();
+        _isRecorderInitialized = false;
+      }
+    } catch (e) {
+      print('Error cleaning up recorder: $e');
+    }
+  }
+
+  // Initialize audio recorder with better error handling
   Future<void> _initRecorder() async {
     try {
+      // Request microphone permission
       final status = await Permission.microphone.request();
       if (status != PermissionStatus.granted) {
         print('Microphone permission not granted: $status');
         return;
       }
 
+      // Open recorder with proper error handling
       await _soundRecorder.openRecorder();
-      _isRecorderInitialized = true;
-      setState(() {});
+      if (_isMounted) {
+        setState(() {
+          _isRecorderInitialized = true;
+        });
+      }
     } catch (e) {
       print('Error initializing recorder: $e');
+      // Only update UI if still mounted
+      if (_isMounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Failed to initialize audio recorder: ${e.toString()}',
+            ),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 
@@ -77,11 +116,22 @@ class _SoundStepState extends State<SoundStep> {
         codec: Codec.aacMP4,
       );
 
-      setState(() {
-        _isRecording = true;
-      });
+      if (_isMounted) {
+        setState(() {
+          _isRecording = true;
+        });
+      }
     } catch (e) {
       print('Error starting recording: $e');
+      // Only update UI if still mounted
+      if (_isMounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error starting recording: ${e.toString()}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 
@@ -94,18 +144,29 @@ class _SoundStepState extends State<SoundStep> {
     try {
       final path = await _soundRecorder.stopRecorder();
 
-      setState(() {
-        _isRecording = false;
-      });
+      if (_isMounted) {
+        setState(() {
+          _isRecording = false;
+        });
 
-      if (path != null) {
-        widget.onAudioFileChanged(File(path));
+        if (path != null) {
+          widget.onAudioFileChanged(File(path));
+        }
       }
     } catch (e) {
       print('Error stopping recording: $e');
-      setState(() {
-        _isRecording = false;
-      });
+      if (_isMounted) {
+        setState(() {
+          _isRecording = false;
+        });
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error saving recording: ${e.toString()}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 

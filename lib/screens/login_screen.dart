@@ -1,12 +1,15 @@
 // File location: lib/screens/login_screen.dart
 
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:setscene/screens/signup_screen.dart';
 import 'package:setscene/services/auth_service.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:setscene/screens/home_screen.dart';
 
 class LoginScreen extends StatefulWidget {
-  const LoginScreen({super.key});
+  final String? initialError;
+
+  const LoginScreen({super.key, this.initialError});
 
   @override
   _LoginScreenState createState() => _LoginScreenState();
@@ -40,6 +43,11 @@ class _LoginScreenState extends State<LoginScreen>
     );
 
     _animationController.forward();
+
+    // Set initial error if provided
+    if (widget.initialError != null) {
+      _error = widget.initialError;
+    }
   }
 
   @override
@@ -60,25 +68,64 @@ class _LoginScreenState extends State<LoginScreen>
       });
 
       try {
-        await _authService.signInWithEmailAndPassword(
-          _emailController.text.trim(),
-          _passwordController.text.trim(),
+        // Log the sign-in attempt for debugging
+        print(
+          "LoginScreen: Attempting to sign in with email: ${_emailController.text.trim()}",
         );
-        // Success - AuthWrapper will handle navigation
-      } on FirebaseAuthException catch (e) {
-        setState(() {
-          _error = e.message;
+
+        final response = await _authService.signIn(
+          email: _emailController.text.trim(),
+          password: _passwordController.text.trim(),
+        );
+
+        print(
+          "LoginScreen: Sign in response received, user: ${response.user?.id}",
+        );
+
+        // Add a timeout to prevent infinite loading
+        Future.delayed(const Duration(seconds: 5), () {
+          if (mounted && _isLoading) {
+            print("LoginScreen: Login timeout reached, checking state");
+            final currentUser = Supabase.instance.client.auth.currentUser;
+
+            if (currentUser != null) {
+              // User is logged in but UI didn't update - force navigation
+              print("LoginScreen: User is logged in, forcing navigation");
+              Navigator.of(context).pushReplacement(
+                MaterialPageRoute(builder: (context) => const HomeScreen()),
+              );
+            } else {
+              // User isn't logged in after timeout
+              print("LoginScreen: Login timeout - user not logged in");
+              setState(() {
+                _error = 'Login timed out. Please try again.';
+                _isLoading = false;
+              });
+            }
+          }
         });
-      } catch (e) {
-        setState(() {
-          _error = 'Unable to sign in. Please try again later.';
-        });
-      } finally {
-        if (mounted) {
-          setState(() {
-            _isLoading = false;
-          });
+
+        // Also check immediately in case the auth state changed quickly
+        final currentUser = Supabase.instance.client.auth.currentUser;
+        if (currentUser != null) {
+          print("LoginScreen: User is logged in immediately, navigating");
+          if (mounted) {
+            Navigator.of(context).pushReplacement(
+              MaterialPageRoute(builder: (context) => const HomeScreen()),
+            );
+          }
         }
+      } catch (e) {
+        print("LoginScreen: Error during sign in: $e");
+        setState(() {
+          if (e is AuthException) {
+            _error = e.message;
+          } else {
+            // Use generic error message for security
+            _error = 'Invalid credentials. Please try again.';
+          }
+          _isLoading = false;
+        });
       }
     }
   }
@@ -116,6 +163,14 @@ class _LoginScreenState extends State<LoginScreen>
         _emailController.text = result['email'] ?? '';
       });
     }
+  }
+
+  // Reset loading state (added for recovery from stuck states)
+  void _resetLoadingState() {
+    setState(() {
+      _isLoading = false;
+      _error = 'Login process was reset. Please try again.';
+    });
   }
 
   // Password reset dialog
@@ -178,9 +233,7 @@ class _LoginScreenState extends State<LoginScreen>
                 ),
                 actions: [
                   TextButton(
-                    onPressed: () {
-                      Navigator.of(context).pop();
-                    },
+                    onPressed: () => Navigator.pop(context),
                     child: Text(
                       'Cancel',
                       style: TextStyle(color: Colors.grey[400]),
@@ -214,7 +267,7 @@ class _LoginScreenState extends State<LoginScreen>
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   SnackBar(
                                     content: const Text(
-                                      'Password reset email sent',
+                                      'If your email is registered, a password reset link will be sent',
                                     ),
                                     backgroundColor: Colors.green[700],
                                     behavior: SnackBarBehavior.floating,
@@ -224,15 +277,11 @@ class _LoginScreenState extends State<LoginScreen>
                                     margin: const EdgeInsets.all(10),
                                   ),
                                 );
-                              } on FirebaseAuthException catch (e) {
-                                setDialogState(() {
-                                  resetError = e.message;
-                                  isResetting = false;
-                                });
                               } catch (e) {
+                                // Always show same message regardless of error
                                 setDialogState(() {
                                   resetError =
-                                      'Failed to send reset email. Try again.';
+                                      'Could not process your request. Please try again.';
                                   isResetting = false;
                                 });
                               }
@@ -303,7 +352,7 @@ class _LoginScreenState extends State<LoginScreen>
                             color: Colors.white.withOpacity(0.05),
                             borderRadius: BorderRadius.circular(24),
                           ),
-                          child: Icon(
+                          child: const Icon(
                             Icons.location_on,
                             color: Colors.white,
                             size: 50,
@@ -584,13 +633,30 @@ class _LoginScreenState extends State<LoginScreen>
                                 ),
                                 child:
                                     _isLoading
-                                        ? const SizedBox(
-                                          width: 24,
-                                          height: 24,
-                                          child: CircularProgressIndicator(
-                                            color: Colors.black,
-                                            strokeWidth: 2,
-                                          ),
+                                        ? Stack(
+                                          alignment: Alignment.center,
+                                          children: [
+                                            const SizedBox(
+                                              width: 24,
+                                              height: 24,
+                                              child: CircularProgressIndicator(
+                                                color: Colors.black,
+                                                strokeWidth: 2,
+                                              ),
+                                            ),
+                                            // Cancel button on loading
+                                            Positioned(
+                                              right: 0,
+                                              child: IconButton(
+                                                icon: const Icon(
+                                                  Icons.close,
+                                                  color: Colors.black54,
+                                                  size: 16,
+                                                ),
+                                                onPressed: _resetLoadingState,
+                                              ),
+                                            ),
+                                          ],
                                         )
                                         : const Text(
                                           'Sign In',
