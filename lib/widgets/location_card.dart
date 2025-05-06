@@ -7,8 +7,7 @@ class LocationCard extends StatelessWidget {
   final LocationModel location;
   final bool isActive;
 
-  const LocationCard({Key? key, required this.location, this.isActive = true})
-    : super(key: key);
+  const LocationCard({super.key, required this.location, this.isActive = true});
 
   @override
   Widget build(BuildContext context) {

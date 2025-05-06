@@ -10,7 +10,7 @@ import 'package:permission_handler/permission_handler.dart';
 class CreateScreen extends StatefulWidget {
   final VoidCallback? onClose;
 
-  const CreateScreen({Key? key, this.onClose}) : super(key: key);
+  const CreateScreen({super.key, this.onClose});
 
   @override
   _CreateScreenState createState() => _CreateScreenState();

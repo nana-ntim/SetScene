@@ -4,7 +4,7 @@ import 'package:setscene/widgets/location_card.dart';
 import 'package:setscene/services/location_service.dart';
 
 class FeedScreen extends StatefulWidget {
-  const FeedScreen({Key? key}) : super(key: key);
+  const FeedScreen({super.key});
 
   @override
   _FeedScreenState createState() => _FeedScreenState();

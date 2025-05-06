@@ -6,8 +6,7 @@ import 'package:setscene/services/location_service.dart';
 class LocationDetailScreen extends StatefulWidget {
   final LocationModel location;
 
-  const LocationDetailScreen({Key? key, required this.location})
-    : super(key: key);
+  const LocationDetailScreen({super.key, required this.location});
 
   @override
   _LocationDetailScreenState createState() => _LocationDetailScreenState();

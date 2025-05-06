@@ -7,7 +7,7 @@ import 'package:setscene/screens/profile_screen.dart';
 import 'package:setscene/services/auth_service.dart';
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({Key? key}) : super(key: key);
+  const HomeScreen({super.key});
 
   @override
   _HomeScreenState createState() => _HomeScreenState();

@@ -12,7 +12,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 class ProfileScreen extends StatefulWidget {
   final String? userId; // If null, shows current user profile
 
-  const ProfileScreen({Key? key, this.userId}) : super(key: key);
+  const ProfileScreen({super.key, this.userId});
 
   @override
   _ProfileScreenState createState() => _ProfileScreenState();

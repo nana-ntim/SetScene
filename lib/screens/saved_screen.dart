@@ -5,7 +5,7 @@ import 'package:setscene/screens/location_detail_screen.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 
 class SavedScreen extends StatefulWidget {
-  const SavedScreen({Key? key}) : super(key: key);
+  const SavedScreen({super.key});
 
   @override
   _SavedScreenState createState() => _SavedScreenState();

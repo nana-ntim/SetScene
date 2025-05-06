@@ -28,7 +28,7 @@ void main() async {
 }
 
 class MyApp extends StatelessWidget {
-  const MyApp({Key? key}) : super(key: key);
+  const MyApp({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -44,7 +44,6 @@ class MyApp extends StatelessWidget {
           primary: Colors.blue[600]!,
           secondary: Colors.blue[400]!,
           surface: Colors.grey[900]!,
-          background: Colors.black,
         ),
         appBarTheme: AppBarTheme(
           backgroundColor: Colors.black,
@@ -122,7 +121,7 @@ class MyApp extends StatelessWidget {
 }
 
 class InitialScreen extends StatefulWidget {
-  const InitialScreen({Key? key}) : super(key: key);
+  const InitialScreen({super.key});
 
   @override
   _InitialScreenState createState() => _InitialScreenState();
@@ -161,7 +160,7 @@ class _InitialScreenState extends State<InitialScreen> {
 }
 
 class AuthWrapper extends StatelessWidget {
-  const AuthWrapper({Key? key}) : super(key: key);
+  const AuthWrapper({super.key});
 
   @override
   Widget build(BuildContext context) {
